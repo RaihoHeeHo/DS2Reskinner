@@ -1,6 +1,30 @@
 # DS2 Reskinner (GUI)
 
-Double-click **DS2 Reskinner.command** (or run `python3 ds2_reskinner.py`).
+## Download (no Python needed)
+
+Get the zip for your system from the [Releases](../../releases) page, unzip it
+and open **DS2 Reskinner**.
+
+- **macOS:** take `macOS-AppleSilicon` for M1/M2/M3/M4 Macs and `macOS-Intel`
+  for older Intel Macs (Apple menu → About This Mac shows which). The first
+  time, right-click the app and choose **Open** (it isn't signed by Apple).
+- **Windows:** if SmartScreen warns about an unknown app, click
+  **More info → Run anyway**.
+- **Linux:** run `./"DS2 Reskinner"` (it needs Tk, which most desktops have).
+
+## Run from source
+
+Needs Python 3.9 or newer with tkinter. Download the code, then:
+
+| System | Start it with | If tkinter is missing |
+|---|---|---|
+| macOS | double-click `DS2 Reskinner.command` | `brew install python-tk@3.X` (your Python version), or use python.org Python |
+| Windows | double-click `DS2 Reskinner.bat` | install Python from python.org with "Add python.exe to PATH" ticked |
+| Linux | `./ds2-reskinner.sh` | `sudo apt install python3-tk` (Debian/Ubuntu), `sudo dnf install python3-tkinter` (Fedora), `sudo pacman -S tk` (Arch) |
+
+Or run `python3 ds2_reskinner.py` anywhere.
+
+## Using it
 
 1. Choose your Devil Summoner 2 ISO (North American, SLUS_218.45) and your
    Nocturne ISO. Neither file is changed.
@@ -13,9 +37,7 @@ Double-click **DS2 Reskinner.command** (or run `python3 ds2_reskinner.py`).
      animation fixes that worked for the tested swaps. You can edit them.
 3. Choose where to save the modded ISO and press **Build ISO**.
 
-Needs Python 3 with tkinter (python.org Python has it; Homebrew Python needs
-`brew install python-tk@3.X`, matching your `python3 --version`). Start the game from an in-game save, not a PCSX2
-save state.
+Start the game from an in-game save, not a PCSX2 save state.
 
 Every command below also accepts a game ISO wherever it asks for a game
 folder (`ds2`, `nocturne`), so nothing has to be extracted first.

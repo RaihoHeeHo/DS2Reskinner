@@ -1,0 +1,63 @@
+# Builds DS2 Reskinner for Windows, macOS and Linux whenever you publish a
+# GitHub release, and attaches the three downloads to that release.
+name: Build downloads
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            name: Windows
+          - os: macos-latest
+            name: macOS-AppleSilicon
+          - os: macos-15-intel
+            name: macOS-Intel
+          - os: ubuntu-22.04
+            name: Linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install PyInstaller
+        run: python -m pip install pyinstaller
+      - name: Build
+        shell: bash
+        run: |
+          SEP=":"; [ "${{ runner.os }}" = "Windows" ] && SEP=";"
+          python -m PyInstaller --noconfirm --windowed --name "DS2 Reskinner" \
+            --add-data "Nocturne_demon_ids.txt${SEP}." --add-data "DS2_demon_ids.txt${SEP}." \
+            $([ "${{ runner.os }}" = "macOS" ] || echo --onefile) ds2_reskinner.py
+      - name: Package
+        shell: bash
+        run: |
+          OUT="DS2Reskinner-${{ matrix.name }}.zip"
+          cd dist
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            7z a "../$OUT" "DS2 Reskinner.exe"
+          elif [ "${{ runner.os }}" = "macOS" ]; then
+            ditto -c -k --keepParent "DS2 Reskinner.app" "../$OUT"
+          else
+            chmod +x "DS2 Reskinner"; zip "../$OUT" "DS2 Reskinner"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DS2Reskinner-${{ matrix.name }}
+          path: DS2Reskinner-${{ matrix.name }}.zip
+      - name: Attach to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release upload "${{ github.event.release.tag_name }}" "DS2Reskinner-${{ matrix.name }}.zip" --clobber

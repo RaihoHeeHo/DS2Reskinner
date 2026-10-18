@@ -34,7 +34,7 @@ class App(tk.Tk):
         self.geometry("980x680")
         self.minsize(860, 600)
         style = ttk.Style(self)
-        if "clam" in style.theme_names() and sys.platform != "darwin":
+        if "clam" in style.theme_names() and sys.platform.startswith("linux"):
             style.theme_use("clam")
         style.configure("Title.TLabel", font=("Helvetica", 18, "bold"))
         style.configure("Sub.TLabel", foreground="#555")
@@ -385,7 +385,7 @@ class CustomPage(ttk.Frame):
                 continue
             info = r.ds2_info(tid)
             tag = f"  → {taken[tid]}" if tid in taken else ""
-            lock = "  🔒" if tid in self.locks else ""
+            lock = "  (locked)" if tid in self.locks else ""
             items.append((tid, f"{tid}  {name}  (Lv {info['level']}, {info['race']}){lock}{tag}"))
         self.ds2_list.set_items(items)
         self.plan_tree.delete(*self.plan_tree.get_children())
