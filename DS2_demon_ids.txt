@@ -1,0 +1,154 @@
+Devil Summoner 2 demon IDs (SB_DATA.TBL record = model/devil/<ID>.PB)
+ID   Level Race     Name
+001  12    Pyro     Ukobach
+002  17    Pyro     Pyro Jack
+003  22    Pyro     Orthrus
+004  28    Pyro     Oshichi
+005  33    Pyro     Sati
+006  37    Pyro     Gdon
+007  41    Pyro     Throne
+008  46    Pyro     Cerberus
+009  50    Pyro     Muspell
+00A  68    Pyro     Belial
+00B  2     Pyro     Onmoraki
+00C  7     Pyro     Enku
+00D  54    Pyro     Vritra
+00E  64    Pyro     Mada
+00F  59    Pyro     Kagutsuchi
+010  75    Pyro     Asura
+011  80    Pyro     Lucifer
+016  16    Frost    Azumi
+017  13    Frost    Jack Frost
+018  40    Frost    Raiho
+019  23    Frost    Jubokko
+01A  35    Frost    Oukuninushi
+01B  43    Frost    Raja Naga
+01C  51    Frost    Tarrasque
+01D  55    Frost    Ouyamatsumi
+01E  62    Frost    Arahabaki
+01F  66    Frost    Orochi
+020  4     Frost    Preta
+021  9     Frost    Chou-keshin
+022  20    Frost    Pabilsag
+023  29    Frost    Alraune
+024  32    Frost    Black Ooze
+025  47    Frost    Long
+026  58    Frost    Basilisk
+027  72    Frost    Arioch
+028  3     Frost    (unidentified: enemy/variant)
+02C  10    Volt     Agathion
+02D  18    Volt     Raiju
+02E  22    Volt     Tsuchigumo
+02F  31    Volt     Oboroguruma
+030  36    Volt     Nue
+031  41    Volt     Parvati
+032  45    Volt     Mishaguji
+033  49    Volt     Oumitsunu
+034  56    Volt     Thor
+035  3     Volt     Koropokkur
+036  14    Volt     Makami
+037  26    Volt     Nandi
+038  53    Volt     Cybele
+039  38    Wind     Baek Yong
+03A  60    Volt     Barong
+03B  68    Volt     Astaroth
+03C  74    Volt     Vishnu
+041  4     Wind     Poltergeist
+042  13    Wind     Moh Shuvuu
+043  23    Wind     Anzu
+044  30    Wind     Feng Huang
+045  42    Wind     Ichimokuren
+046  46    Wind     Kurama
+047  50    Wind     Hitokotonusi
+048  27    Wind     Power
+049  60    Wind     Sandalphon
+04A  8     Wind     Angel
+04B  18    Wind     Archangel
+04C  55    Wind     Decarabia
+04D  65    Volt     Kohryu
+04E  34    Wind     Dominion
+04F  69    Wind     Camael
+050  64    Wind     Ophanim
+051  73    Wind     Metatron
+056  6     Fury     Obariyon
+057  11    Fury     Turdak
+058  17    Fury     Oni
+059  19    Fury     Lamia
+05A  32    Fury     Chernobog
+05B  29    Fury     Yoshitsune
+05C  35    Fury     Ikusa
+05D  42    Fury     Triglav
+05E  45    Fury     (unidentified: enemy/variant)
+05F  52    Fury     Shouten
+060  56    Fury     Siegfried
+061  63    Fury     Susano-o
+062  1     Fury     Slime
+063  22    Fury     Gozuki
+064  25    Fury     Mezuki
+065  14    Fury     Nezha
+066  49    Fury     Atavaka
+067  60    Fury     Fenrir
+068  39    Fury     Cu Chulainn
+069  67    Fury     Mahakala
+06A  75    Fury     Shiva
+06B  78    Fury     Masakado
+070  12    Pagan    Alp
+071  15    Pagan    Mokoi
+072  24    Pagan    Okiku-mushi
+073  27    Pagan    Ghoul
+074  30    Pagan    Utai-gaikotsu
+075  40    Pagan    Nebiros
+076  44    Pagan    Gashadokuro
+077  48    Pagan    Incubus
+078  66    Pagan    Lilith
+079  75    Pagan    Beelzebub
+07A  7     Pagan    Sandman
+07B  5     Pagan    Inugami
+07C  19    Pagan    Lilim
+07D  34    Pagan    Jorougumo
+07E  55    Pagan    Black Frost
+07F  52    Pagan    Arachne
+080  58    Pagan    Rangda
+081  70    Pagan    Mot
+082  62    Pagan    Mara
+087  24    Skill    Ippon-datara
+088  20    Skill    Leanan Sidhe
+089  28    Skill    Nekomata
+08A  31    Skill    Thoth
+08B  43    Skill    Nagasunehiko
+08C  47    Skill    Abihiko
+08D  55    Skill    Scathach
+08E  59    Skill    Kudan
+08F  65    Skill    Futsunushi
+090  26    Skill    Legion
+095  2     Skill    Pixie
+096  17    Skill    Blob
+097  15    Skill    Selket
+098  35    Skill    Oberon
+099  39    Skill    Titania
+09A  10    Skill    Tam Lin
+09B  51    Skill    Mikaboshi
+09C  62    Skill    Taotie
+09D  71    Skill    Belphegor
+09E  48    Skill    High Pixie
+09F  2     Skill    Pixie (alt/enemy copy)
+0A2  31    Element  Undine
+0A3  29    Element  Sylph
+0A4  19    Element  Aquans
+0A5  17    Element  Aeros
+0A6  21    Element  Flaemis
+0A7  14    Element  Erthys
+0AC  30    Spirit   Kusi Mitama
+0AD  22    Spirit   Ara Mitama
+0AE  25    Spirit   Nigi Mitama
+0AF  32    Spirit   Saki Mitama
+0B4  42    Fiend    Alice
+0B5  49    Fiend    White Rider
+0B6  51    Fiend    Red Rider
+0B7  60    Fiend    Black Rider
+0B8  69    Fiend    Pale Rider
+0BA  33    Fiend    Binbou-gami
+0BB  55    Fiend    Yakubyou-gami
+
+Records 0C0 and above are bosses, story enemies and variants (not playable demons).
+028 and 05E are unnamed variants inside the playable range.

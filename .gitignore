@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.DS_Store
+*.iso
+*.ISO
+DDS3.DDT
+DDS3.IMG
+SLUS_*
+mod/
+mod_test/
