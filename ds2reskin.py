@@ -55,7 +55,8 @@ class NewDemon:
 
 
 def m(text):
-    return {int(a): int(b) for a, b in (p.split("=") for p in text.split(","))} if text else {}
+    return {int(a): None if b == "-" else int(b)
+            for a, b in (p.split("=") for p in text.split(","))} if text else {}
 
 
 CONFIRMED = [
@@ -210,6 +211,48 @@ def slot_frames(model):
     return [t.motion_frames(model, s) if s else None for s in slots]
 
 
+ANIMATION_PRESETS = {
+    "Nocturne → Devil Summoner 2": {
+        0: (0,), 1: (2,), 2: (2,), 3: (3,), 4: (1,), 5: (1,),
+        6: (3, 8, 12), 7: (4, 5, 7, 11), 8: (4, 5, 7, 11),
+        9: (3, 8, 12), 10: (9, 10), 11: (4, 5, 7, 11),
+        13: (0, 12), 14: (0, 12), 15: (3, 4, 5, 7, 8, 11),
+    },
+}
+
+
+def preset_map(name, base_frames, noc_frames):
+    """Resolve destination=source entries against the original source table.
+
+    BASE_FRAMES is the destination game's original table: its empty slots
+    stay empty. None explicitly clears an incoming animation from that slot.
+    """
+    preferences = ANIMATION_PRESETS[name]
+    mapping, reasons = {}, {}
+
+    def occupied(frames, slot):
+        return slot < len(frames) and frames[slot] is not None
+
+    for dst in range(max(len(base_frames), len(noc_frames))):
+        base_empty = not occupied(base_frames, dst)
+        if base_empty:
+            mapping[dst] = None
+            reasons[dst] = "kept empty by preset"
+            continue
+        if dst not in preferences:
+            continue
+        candidates = [src for src in preferences[dst] if occupied(noc_frames, src)]
+        if dst == 11:
+            used_casts = {mapping.get(7), mapping.get(8)}
+            different = [src for src in candidates if src not in used_casts]
+            candidates = different or candidates
+        source = candidates[0] if candidates else None
+        mapping[dst] = source
+        reasons[dst] = (f"preset: plays Nocturne slot {source}" if source is not None
+                        else "left empty: no preferred Nocturne animation available")
+    return mapping, reasons
+
+
 def suggest_map(base_frames, noc_frames):
     """Pick a Nocturne animation for every slot DS2 uses that the model leaves empty,
     following what worked on the confirmed reskins."""
@@ -338,7 +381,7 @@ def build(plan, ds2_iso, noc_iso, out_iso, log=print, extra_levels=None):
             if p.kind == "reskin":
                 args = [ds2_iso, noc_iso, f"0x{p.noc_id:x}", p.target, mod]
                 if p.map:
-                    args += ["--map", ",".join(f"{k}={v}" for k, v in sorted(p.map.items()))]
+                    args += ["--map", ",".join(f"{k}={v if v is not None else '-'}" for k, v in sorted(p.map.items()))]
                 if p.share:
                     args.append("--share")
                 run(t.cmd_reskin, args)

@@ -37,6 +37,20 @@ Or run `python3 ds2_reskinner.py` anywhere.
      animation fixes that worked for the tested swaps. You can edit them.
 3. Choose where to save the modded ISO and press **Build ISO**.
 
+In **Custom swap**, select **Nocturne → Devil Summoner 2** under **Animation
+preset** and press **Apply preset**. It follows the preset's source preference
+order, skips missing Nocturne animations, and prefers a different cast for DS2
+slot 11 than the ones assigned to slots 7/8. Original DS2 empty slots stay
+empty, even when the incoming Nocturne slot is populated. If all preferred
+sources are missing, the destination is left empty. Populated slots without a
+preset rule (12 and 16) retain their incoming contents. The preset stays
+selected for subsequent pairings; **Current suggestions** restores the existing
+suggestion behavior. Tested Auto/Manual recipes are unchanged.
+
+The editable mapping field uses **DS2 destination = Nocturne source**, so
+`6=3` puts Nocturne's slot 3 in DS2's slot 6. `10=-` explicitly empties DS2
+slot 10. The slot report shows the resolved mapping before you add the swap.
+
 Start the game from an in-game save, not a PCSX2 save state.
 
 Every command below also accepts a game ISO wherever it asks for a game
@@ -228,3 +242,41 @@ Don't rebuild the disc from extracted files with xorriso/mkisofs: that moves
 files around, and the game then fails to boot.
 
 Always test with a copy of your save data.
+
+# Model and animation preview (experimental)
+
+Open **Tools → Model / animation preview…** in the reskinner, double-click
+**DDS3 Preview.command** (macOS) / **DDS3 Preview.bat** (Windows), or run:
+
+```
+python3 ds2_previewer.py "/path/to/Nocturne" "/path/to/Devil Summoner 2"
+```
+
+Each source can be a game dump folder containing `DDS3.DDT` and `DDS3.IMG`,
+or a game ISO. With no arguments, the previewer looks for the `Nocturne` and
+`Devil Summoner 2` dump folders in Downloads, then offers a folder picker if
+neither is present. The Tools menu uses the game sources selected in the
+reskinner, or offers a dump folder picker.
+
+The preview opens in your browser. Keep the reskinner (or the command above)
+running while using it. It needs a browser with WebGL; no additional Python
+packages are needed. Rendering dependencies are included locally.
+
+- Filter by game, demon name, ID, or archive path. Battle and field LB files,
+  regular PB models, and menu PB models are listed separately.
+- Drag to orbit, scroll to zoom, right-drag or Shift-drag to pan.
+- Select an animation slot, press Play, or scrub/step through frames. Slots use
+  game-specific action labels. **Labels → Automatic** follows the source archive;
+  choose a game explicitly for standalone files. Unlisted slots stay numbered.
+- Toggle textures, wireframe, the skeleton, or highlight a bone by ID.
+- **Open local PB / LB…** previews an extracted or modified file.
+
+This viewer reads the files and never patches the game archives. The service
+listens only on `127.0.0.1`, uses a fresh private URL for each session, and
+serves only its viewer assets and selected game models.
+
+This first version supports skeletal animations and the mesh types used by the
+Nocturne and DS2 demon libraries. It does not yet reproduce morph animation,
+texture animation, special game shading, particles, or hit spheres. Unsupported
+animation channels are reported in the viewer. See
+[format notes](preview/FORMAT_NOTES.md) for details and validation commands.

@@ -37,7 +37,7 @@ jobs:
         run: |
           SEP=":"; [ "${{ runner.os }}" = "Windows" ] && SEP=";"
           python -m PyInstaller --noconfirm --windowed --name "DS2 Reskinner" \
-            --add-data "Nocturne_demon_ids.txt${SEP}." --add-data "DS2_demon_ids.txt${SEP}." \
+            --add-data "preview${SEP}preview" --add-data "Nocturne_demon_ids.txt${SEP}." --add-data "DS2_demon_ids.txt${SEP}." \
             $([ "${{ runner.os }}" = "macOS" ] || echo --onefile) ds2_reskinner.py
       - name: Package
         shell: bash

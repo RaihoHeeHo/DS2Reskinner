@@ -45,6 +45,13 @@ class App(tk.Tk):
         self.ds2_iso = tk.StringVar()
         self.noc_iso = tk.StringVar()
         self.mode = tk.StringVar(value="auto")
+        self.preview_servers = []
+        menu = tk.Menu(self)
+        tools = tk.Menu(menu, tearoff=False)
+        tools.add_command(label="Model / animation preview…", command=self.open_preview)
+        menu.add_cascade(label="Tools", menu=tools)
+        self.configure(menu=menu)
+        self.protocol("WM_DELETE_WINDOW", self.close)
         self.plan = []            # list of r.Reskin / r.NewDemon
         self.ds2_ok = self.noc_ok = False
 
@@ -58,6 +65,26 @@ class App(tk.Tk):
         self.container.rowconfigure(0, weight=1)
         self.container.columnconfigure(0, weight=1)
         self.show("GamesPage")
+
+    def open_preview(self):
+        sources = [v.get() for v in (self.noc_iso, self.ds2_iso) if v.get()]
+        if not sources:
+            folder = filedialog.askdirectory(title="Select game dump folder (DDS3.DDT + DDS3.IMG)")
+            if not folder:
+                return
+            sources = [folder]
+        try:
+            import ds2_previewer
+            server, _ = ds2_previewer.launch(sources)
+            self.preview_servers.append(server)
+        except (ValueError, OSError, SystemExit) as exc:
+            messagebox.showerror("Model preview", str(exc))
+
+    def close(self):
+        for server in self.preview_servers:
+            server.shutdown()
+            server.server_close()
+        self.destroy()
 
     def show(self, name):
         page = self.pages[name]
@@ -328,7 +355,15 @@ class CustomPage(ttk.Frame):
         ttk.Label(form, text="Animation fixes").grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.map_text = tk.StringVar()
         ttk.Entry(form, textvariable=self.map_text, width=30).grid(row=1, column=1, sticky="w", padx=6, pady=(4, 0))
-        ttk.Label(form, text="slot=source, e.g. 6=7,12=7", style="Sub.TLabel").grid(row=1, column=2, sticky="w")
+        ttk.Label(form, text="DS2=Nocturne, e.g. 6=3; 10=- clears", style="Sub.TLabel").grid(row=1, column=2, sticky="w")
+        ttk.Label(form, text="Animation preset").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.animation_preset = tk.StringVar(value="Current suggestions")
+        preset = ttk.Combobox(form, textvariable=self.animation_preset, state="readonly", width=29,
+                              values=("Current suggestions", *r.ANIMATION_PRESETS))
+        preset.grid(row=2, column=1, sticky="w", padx=6, pady=(4, 0))
+        ttk.Button(form, text="Apply preset", command=self.apply_preset).grid(row=2, column=2, sticky="w")
+        ttk.Label(form, text="Presets preserve the destination game's empty slots.",
+                  style="Sub.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
         self.add_btn = ttk.Button(form, text="Add to my list →", command=self.add)
         self.add_btn.grid(row=0, column=2, sticky="e")
         self.add_btn.state(["disabled"])
@@ -444,8 +479,29 @@ class CustomPage(ttk.Frame):
 
         mapping = tested.map if tested else a["map"]
         self.map_text.set(",".join(f"{k}={v}" for k, v in sorted(mapping.items())))
+        if self.animation_preset.get() != "Current suggestions":
+            self.apply_preset()
         self.name.set(tested.name if tested else r.noc_name(noc_id)[:20])
         self.add_btn.state(["!disabled"] if a["usable"] else ["disabled"])
+
+    def apply_preset(self):
+        a = self.analysis
+        if not a:
+            return
+        name = self.animation_preset.get()
+        if name == "Current suggestions":
+            tested = next((p for p in r.CONFIRMED if p.kind == "reskin"
+                           and p.noc_id == a["noc_id"] and p.target == a["target"]), None)
+            mapping, reasons = (tested.map if tested else a["map"]), a["reasons"]
+        else:
+            mapping, reasons = r.preset_map(name, a["base_frames"], a["noc_frames"])
+        self.map_text.set(",".join(f"{dst}={src if src is not None else '-'}"
+                                   for dst, src in sorted(mapping.items())))
+        for item in self.slots.get_children():
+            values = list(self.slots.item(item, "values"))
+            slot = int(values[0])
+            values[3] = reasons.get(slot, "unchanged")
+            self.slots.item(item, values=values, tags=("fix",) if slot in reasons else ())
 
     def add(self):
         a = self.analysis
@@ -458,12 +514,16 @@ class CustomPage(ttk.Frame):
         try:
             mapping = r.m(self.map_text.get().replace(" ", ""))
         except ValueError:
-            messagebox.showerror(APP, "Animation fixes must look like 6=7,12=7.")
+            messagebox.showerror(APP, "Animation fixes must look like 6=3,7=4,10=- (DS2=Nocturne; - clears).")
             return
         have = {i for i, f in enumerate(a["noc_frames"]) if f}
-        bad = [v for v in mapping.values() if v not in have]
+        bad = [v for v in mapping.values() if v is not None and v not in have]
         if bad:
             messagebox.showerror(APP, f"The Nocturne model has nothing in slot(s) {bad} to copy from.")
+            return
+        size = max(len(a["base_frames"]), len(a["noc_frames"]))
+        if any(not 0 <= dst < size for dst in mapping):
+            messagebox.showerror(APP, f"DS2 destination slots must be between 0 and {size - 1}.")
             return
         target = a["target"]
         if target in self.taken():

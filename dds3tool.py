@@ -683,6 +683,7 @@ def fill_motion_slots(model, base, source=None, extend=True, fill=True, share=Fa
     to. With SOURCE, every such slot plays that slot instead. Each filled slot
     gets its own copy of the animation appended to the MT00 chunk: the game
     can't handle two slots pointing at the same animation data.
+    An explicit SOURCE dictionary can remap occupied slots; None clears a slot.
     Returns (new model, [(slot, source slot)]).
     """
     if extend:
@@ -697,7 +698,7 @@ def fill_motion_slots(model, base, source=None, extend=True, fill=True, share=Fa
     used = [i for i, off in enumerate(slots) if off]
     if isinstance(source, dict):   # --map: exactly these slots, from these sources
         for dst, src in source.items():
-            if src not in used or not 0 <= dst < len(slots):
+            if (src is not None and src not in used) or not 0 <= dst < len(slots):
                 sys.exit(f"error: --map {dst}={src}: source slot must hold an animation, "
                          f"target must be 0-{len(slots) - 1}")
         picks = sorted(source.items())
@@ -722,7 +723,7 @@ def fill_motion_slots(model, base, source=None, extend=True, fill=True, share=Fa
         size = struct.unpack_from("<i", model, mt + 4)[0]
         chunk = bytearray(model[mt:mt + size])
         for slot, pick in picks:
-            struct.pack_into("<I", chunk, table - mt + 4 * slot, slots[pick])
+            struct.pack_into("<I", chunk, table - mt + 4 * slot, slots[pick] if pick is not None else 0)
             filled.append((slot, pick))
         rebuild_motion_reloc(chunk)
         return pb_replace_chunk(bytes(model), "MT00", bytes(chunk)), filled
@@ -737,6 +738,10 @@ def fill_motion_slots(model, base, source=None, extend=True, fill=True, share=Fa
     insert_at = 0x20 + trailer
     added = bytearray()
     for slot, pick in picks:
+        if pick is None:
+            struct.pack_into("<I", chunk, tpos + 4 * slot, 0)
+            filled.append((slot, pick))
+            continue
         src = slots[pick]
         struct.pack_into("<I", chunk, tpos + 4 * slot, trailer + len(added))
         added += model[mt + 0x20 + src: mt + 0x20 + ends[src]]
@@ -1114,7 +1119,10 @@ def put_model(ds2_dir, noc_dir, noc_id, target, source, moddir, move_from=None, 
             print("  (--no-extend: slot table kept at Nocturne's size)")
     battle_model = model
     for slot, pick in filled:
-        print(f"  empty animation slot {slot} now plays {'' if share else 'a copy of '}slot {pick}")
+        if pick is None:
+            print(f"  animation slot {slot} left empty")
+        else:
+            print(f"  animation slot {slot} now plays {'' if share else 'a copy of '}slot {pick}")
 
     for rel in (f"model/devil/{target}.PB", f"model/devil_hi/{target}_hi.PB"):
         if archive_has(ds2_dir, rel):
@@ -1165,7 +1173,8 @@ def cmd_reskin(args):
     args, move_from = pop_option(args, "--move-from")
     args, mapping = pop_option(args, "--map")
     if mapping:
-        move_from = {int(a): int(b) for a, b in (p.split("=") for p in mapping.split(","))}
+        move_from = {int(a): None if b == "-" else int(b)
+                     for a, b in (p.split("=") for p in mapping.split(","))}
     elif move_from is not None:
         move_from = int(move_from)
     if len(args) != 5:
