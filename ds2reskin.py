@@ -5,10 +5,13 @@ Everything here calls the same code as the dds3tool commands, so a build from
 the GUI matches what the command-line steps produced.
 """
 import contextlib
+import hashlib
 import io
+import json
 import os
 import shutil
 import struct
+import sys
 import tempfile
 
 import dds3tool as t
@@ -117,6 +120,82 @@ CONFIRMED = [
 ]
 
 RESERVE_SLOTS = {"012", "013", "029", "03D", "0A8"}
+
+
+# ---------------------------------------------------------------- Settings and pictures
+#
+# Where the ISOs are is remembered in a small settings file, and demon
+# pictures are cached next to it so each is only drawn once:
+#     macOS    ~/Library/Application Support/DS2 Reskinner/
+#     Windows  %APPDATA%\DS2 Reskinner\
+#     Linux    ~/.config/ds2-reskinner/  (or $XDG_CONFIG_HOME)
+
+def settings_dir():
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~/Library/Application Support"), "DS2 Reskinner")
+    if sys.platform.startswith("win"):
+        return os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "DS2 Reskinner")
+    base = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    return os.path.join(base, "ds2-reskinner")
+
+
+def settings_path():
+    return os.path.join(settings_dir(), "settings.json")
+
+
+def load_settings():
+    """The saved settings ({} if there are none or the file is unreadable)."""
+    try:
+        with open(settings_path(), encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_settings(**changes):
+    """Merge CHANGES into the settings file; returns False if it couldn't be written."""
+    data = load_settings()
+    data.update(changes)
+    try:
+        os.makedirs(settings_dir(), exist_ok=True)
+        tmp = settings_path() + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        os.replace(tmp, settings_path())
+        return True
+    except OSError:
+        return False
+
+
+def demon_model(game_path, kind, key):
+    """(archive path, model bytes) for a Nocturne demon ID (kind "noc") or DS2 ID string ("ds2")."""
+    if kind == "noc":
+        rel = nocturne_models(game_path)[key]
+        return rel, t.read_archive_file(game_path, rel)
+    return quiet(t.find_ds2_model, game_path, int(key, 16))
+
+
+def demon_picture(game_path, kind, key, size=180):
+    """PNG of a demon's model, drawn once and then read from the picture cache."""
+    import thumbnail
+    rel, data = demon_model(game_path, kind, key)
+    entry = t.game(game_path).index.get(rel.split(" ")[0].lower())
+    ident = f"{os.path.abspath(game_path)}|{rel}|{entry.sector if entry else ''}|{len(data)}|{size}|v{thumbnail.VERSION}"
+    cache = os.path.join(settings_dir(), "pictures", hashlib.sha1(ident.encode()).hexdigest() + ".png")
+    try:
+        with open(cache, "rb") as f:
+            return f.read()
+    except OSError:
+        pass
+    picture = thumbnail.thumbnail_png(data, size)
+    try:
+        os.makedirs(os.path.dirname(cache), exist_ok=True)
+        with open(cache, "wb") as f:
+            f.write(picture)
+    except OSError:
+        pass
+    return picture
 
 
 # ---------------------------------------------------------------- Names

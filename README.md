@@ -27,7 +27,9 @@ Or run `python3 ds2_reskinner.py` anywhere.
 ## Using it
 
 1. Choose your Devil Summoner 2 ISO (North American, SLUS_218.45) and your
-   Nocturne ISO. Neither file is changed.
+   Nocturne ISO. Neither file is changed. The program remembers where they
+   are and checks them each time it starts; if one has been moved, renamed or
+   is on a drive that isn't connected, it says so and you choose it again.
 2. Pick a mode:
    - **Auto swap**: every tested swap (29 reskins and 5 new demons).
    - **Manual swap**: tick the tested swaps you want.
@@ -38,6 +40,15 @@ Or run `python3 ds2_reskinner.py` anywhere.
      missing hit bones, walking demons and story locks, and fills in the
      animation fixes that worked for the tested swaps. You can edit them.
 3. Choose where to save the modded ISO and press **Build ISO**.
+
+In **Custom swap**, selecting a demon in either list shows a picture of its
+model (in its idle pose) above the slot table, so you can see both the incoming
+demon and the one it replaces. Pictures are drawn once and kept, so they show
+instantly the next time.
+
+The ISO locations and the pictures are kept in `~/Library/Application
+Support/DS2 Reskinner` (macOS), `%APPDATA%\DS2 Reskinner` (Windows) or
+`~/.config/ds2-reskinner` (Linux). Deleting that folder resets both.
 
 In **Custom swap**, select **Nocturne → Devil Summoner 2** under **Animation
 preset** and press **Apply preset**. It follows the preset's source preference

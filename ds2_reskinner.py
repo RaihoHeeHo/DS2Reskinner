@@ -6,6 +6,7 @@ of the Devil Summoner 2 ISO. The original ISOs are never changed.
 
 Run:  python3 ds2_reskinner.py
 """
+import base64
 import os
 import queue
 import sys
@@ -25,14 +26,15 @@ import ds2reskin as r  # noqa: E402
 
 APP = "DS2 Reskinner"
 PAD = 12
+PICTURE = 180   # size of the demon pictures on the custom-swap page
 
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(APP)
-        self.geometry("980x680")
-        self.minsize(860, 600)
+        self.geometry("1080x780")
+        self.minsize(940, 700)
         style = ttk.Style(self)
         if "clam" in style.theme_names() and sys.platform.startswith("linux"):
             style.theme_use("clam")
@@ -42,8 +44,9 @@ class App(tk.Tk):
         style.configure("Good.TLabel", foreground="#1b7f3a")
         style.configure("Big.TRadiobutton", font=("Helvetica", 14, "bold"))
 
-        self.ds2_iso = tk.StringVar()
-        self.noc_iso = tk.StringVar()
+        saved = r.load_settings()
+        self.ds2_iso = tk.StringVar(value=saved.get("ds2_iso", ""))
+        self.noc_iso = tk.StringVar(value=saved.get("noc_iso", ""))
         self.mode = tk.StringVar(value="auto")
         self.preview_servers = []
         menu = tk.Menu(self)
@@ -133,6 +136,26 @@ class GamesPage(ttk.Frame):
             self.rows[key] = status
         _, self.next_btn = nav(self, None, self.go_next)
         self.next_btn.state(["disabled"])
+        self.after(100, self.startup_check)
+
+    def startup_check(self):
+        """Check the ISOs remembered from last time; say clearly if one has gone."""
+        missing = []
+        for key, var, game in (("ds2", self.app.ds2_iso, "Devil Summoner 2"),
+                               ("noc", self.app.noc_iso, "Nocturne")):
+            path = var.get()
+            if not path:
+                self.rows[key].configure(text="Not chosen yet.", style="Sub.TLabel")
+            elif not os.path.exists(path):
+                self.rows[key].configure(text=f"✗ Not found where it was last time: {path}. "
+                                              "Choose it again.", style="Bad.TLabel")
+                missing.append(f"{game}: {path}")
+            else:
+                self.check(key)
+        if missing:
+            messagebox.showwarning(APP, "These game ISOs aren't where they were last time (moved, renamed, "
+                                        "or on a drive that isn't connected):\n\n" + "\n".join(missing) +
+                                   "\n\nChoose them again on this page.")
 
     def pick(self, key):
         path = filedialog.askopenfilename(
@@ -149,16 +172,20 @@ class GamesPage(ttk.Frame):
         label.configure(text="Checking…", style="Sub.TLabel")
         self.update_idletasks()
         try:
+            if not os.path.exists(path):
+                raise ValueError(f"Not found: {path}")
             if key == "ds2":
                 r.check_ds2(path)
                 n = len(r.ds2_slots(path))
                 label.configure(text=f"✓ Devil Summoner 2 (SLUS_218.45), {n} demon models", style="Good.TLabel")
                 self.app.ds2_ok = True
+                r.save_settings(ds2_iso=path)
             else:
                 r.check_nocturne(path)
                 n = len(r.nocturne_models(path))
                 label.configure(text=f"✓ Nocturne, {n} demon models", style="Good.TLabel")
                 self.app.noc_ok = True
+                r.save_settings(noc_iso=path)
         except (ValueError, OSError) as e:
             label.configure(text=f"✗ {e}", style="Bad.TLabel")
             if key == "ds2":
@@ -343,9 +370,9 @@ class CustomPage(ttk.Frame):
 
         # Left: pickers
         left = ttk.Frame(body, padding=(0, 0, 8, 0), width=240)
-        self.src_list = SearchList(left, "Nocturne demon", lambda k: self.analyze())
+        self.src_list = SearchList(left, "Nocturne demon", lambda k: self.selected("src", k))
         self.src_list.pack(fill="both", expand=True)
-        self.dst_list = SearchList(left, "Replaces DS2 demon", lambda k: self.analyze())
+        self.dst_list = SearchList(left, "Replaces DS2 demon", lambda k: self.selected("dst", k))
         self.dst_list.pack(fill="both", expand=True, pady=(8, 0))
         body.add(left, weight=1)
 
@@ -357,6 +384,19 @@ class CustomPage(ttk.Frame):
         self.report = tk.Text(mid, height=5, wrap="word", relief="flat", background="#f4f4f4",
                               foreground="#222222")
         self.report.pack(fill="x", pady=(4, 6))
+        pics = ttk.Frame(mid)
+        pics.pack(fill="x", pady=(0, 6))
+        self.pictures = {}
+        self.blank = tk.PhotoImage(width=PICTURE, height=PICTURE)   # keeps the size in pixels
+        for side in ("src", "dst"):
+            box = ttk.Frame(pics)
+            box.pack(side="left", padx=(0, 12))
+            image = tk.Label(box, image=self.blank, background="#f4f4f4", relief="flat")
+            image.pack()
+            caption = ttk.Label(box, text="", style="Sub.TLabel", wraplength=PICTURE)
+            caption.pack(anchor="w")
+            self.pictures[side] = {"image": image, "caption": caption, "photo": None, "want": None}
+        self.picture_queue = queue.Queue()
         self.report.tag_configure("bad", foreground="#b00020")
         self.report.tag_configure("note", foreground="#555")
         form = ttk.Frame(mid)
@@ -386,7 +426,7 @@ class CustomPage(ttk.Frame):
         self.add_btn.grid(row=0, column=2, sticky="e")
         self.add_btn.state(["disabled"])
         cols = ("slot", "ds2", "noc", "plan")
-        self.slots = ttk.Treeview(mid, columns=cols, show="headings", height=10)
+        self.slots = ttk.Treeview(mid, columns=cols, show="headings", height=8)
         for c, text, w in (("slot", "Slot", 44), ("ds2", "DS2", 60), ("noc", "Nocturne", 72),
                            ("plan", "Fix", 200)):
             self.slots.heading(c, text=text)
@@ -451,10 +491,66 @@ class CustomPage(ttk.Frame):
             items.append((i, f"0x{i:02X}  {r.noc_name(i)}{tag}"))
         return items
 
+    # -- pictures
+    def selected(self, side, key):
+        self.show_picture(side, key)
+        self.analyze()
+
+    def show_picture(self, side, key):
+        """Draw the selected demon in the background and show it when ready."""
+        pic = self.pictures[side]
+        if key is None:
+            return
+        rev = self.reverse()
+        kind = ("ds2" if rev else "noc") if side == "src" else ("noc" if rev else "ds2")
+        game = self.app.ds2_iso.get() if kind == "ds2" else self.app.noc_iso.get()
+        name = r.ds2_name(key) if kind == "ds2" else r.noc_name(key)
+        label = f"{'DS2' if kind == 'ds2' else 'Nocturne'} · {name}"
+        want = (kind, key)
+        pic["want"] = want
+        pic["caption"].configure(text=label + " (drawing…)")
+
+        def work():
+            try:
+                result = r.demon_picture(game, kind, key, PICTURE)
+            except Exception as e:  # shown under the picture, never fatal
+                result = e
+            self.picture_queue.put((side, want, label, result))
+
+        threading.Thread(target=work, daemon=True).start()
+        self.after(50, self.poll_pictures)
+
+    def poll_pictures(self):
+        try:
+            while True:
+                side, want, label, result = self.picture_queue.get_nowait()
+                pic = self.pictures[side]
+                if pic["want"] != want:
+                    continue   # the selection moved on while this one was drawn
+                if isinstance(result, Exception):
+                    pic["photo"] = None
+                    pic["image"].configure(image=self.blank)
+                    pic["caption"].configure(text=f"{label}: couldn't draw this model ({result})")
+                else:
+                    pic["photo"] = tk.PhotoImage(data=base64.b64encode(result).decode("ascii"))
+                    pic["image"].configure(image=pic["photo"])
+                    pic["caption"].configure(text=label)
+        except queue.Empty:
+            pass
+        if any(p["want"] and p["caption"].cget("text").endswith("(drawing…)") for p in self.pictures.values()):
+            self.after(80, self.poll_pictures)
+
+    def clear_pictures(self):
+        for pic in self.pictures.values():
+            pic["want"] = pic["photo"] = None
+            pic["image"].configure(image=self.blank)
+            pic["caption"].configure(text="")
+
     def on_direction(self):
         """Swap what the two lists hold when the direction changes."""
         if not hasattr(self, "ds2_names"):
             return
+        self.clear_pictures()
         self.analysis = None
         self.verdict.configure(text="Pick a demon on each side.")
         self.add_btn.state(["disabled"])

@@ -24,6 +24,7 @@ class W:
             (self.states.discard(x[1:]) if x.startswith("!") else self.states.add(x))
         return self.states
     def __getitem__(self, k): return self.kw.get(k, 0)
+    def cget(self, k): return self.kw.get(k, "")
 
 class Listbox(W):
     def __init__(self, *a, **k): super().__init__(*a, **k); self.rows = []; self.sel = ()
@@ -44,7 +45,7 @@ class Tree(W):
     def selection(self): return self.sel
 
 tk = types.ModuleType("tkinter"); ttk = types.ModuleType("tkinter.ttk")
-for n in ("Tk", "Menu", "Text"): setattr(tk, n, W)
+for n in ("Tk", "Menu", "Text", "Label", "PhotoImage"): setattr(tk, n, W)
 class StringVar(Var):
     def __init__(self, value="", **k): super().__init__(value)
 class BooleanVar(Var):
@@ -59,17 +60,43 @@ class Style(W):
 ttk.Style = Style
 answers = []
 mb = types.SimpleNamespace(showerror=lambda *a: answers.append(("error",) + a),
+                           showwarning=lambda *a: answers.append(("warning",) + a),
                            showinfo=lambda *a: answers.append(("info",) + a), askyesno=lambda *a: True)
 fd = types.SimpleNamespace()
 tk.ttk, tk.messagebox, tk.filedialog = ttk, mb, fd
 sys.modules.update({"tkinter": tk, "tkinter.ttk": ttk, "tkinter.messagebox": mb, "tkinter.filedialog": fd})
 
+import os, tempfile, time
+os.environ["XDG_CONFIG_HOME"] = tempfile.mkdtemp()
 import ds2_reskinner as g, ds2reskin as r
-app = g.App(); app.ds2_iso.set(sys.argv[3]); app.noc_iso.set(sys.argv[2])
+
+# Startup: one remembered ISO has gone missing.
+r.save_settings(ds2_iso=sys.argv[3], noc_iso="/no/such/Nocturne.iso")
+app = g.App()
+games = app.pages["GamesPage"]; games.startup_check()
+assert answers and answers[-1][0] == "warning" and "Nocturne" in answers[-1][2], answers
+assert app.ds2_ok and not app.noc_ok and "disabled" in games.next_btn.states
+print("startup warning:", answers[-1][2].splitlines()[2])
+app.noc_iso.set(sys.argv[2]); games.check("noc")
+assert app.noc_ok and "disabled" not in games.next_btn.states
+assert r.load_settings() == {"ds2_iso": sys.argv[3], "noc_iso": sys.argv[2]}, r.load_settings()
+answers.clear(); app2 = g.App(); app2.pages["GamesPage"].startup_check()
+assert not answers and app2.ds2_ok and app2.noc_ok, answers
+print("remembered ISOs found on the next start")
+
 page = app.pages["CustomPage"]; page.on_show()
 
+def wait_pictures():
+    for _ in range(200):
+        page.poll_pictures()
+        if not any(p["caption"].kw.get("text", "").endswith("(drawing…)") for p in page.pictures.values()):
+            return
+        time.sleep(0.1)
+    raise AssertionError("pictures never finished")
+
 def pick(lst, key):
-    lst.lb.sel = (next(i for i, (k, _) in enumerate(lst.shown) if k == key),); page.analyze()
+    lst.lb.sel = (next(i for i, (k, _) in enumerate(lst.shown) if k == key),)
+    page.selected("src" if lst is page.src_list else "dst", key)
 
 # reverse: DS2 Angel -> Nocturne Pixie
 page.direction.set(r.REVERSE_PRESET); page.on_direction()
@@ -77,6 +104,11 @@ assert page.src_list.title_label.kw["text"] == "Devil Summoner 2 demon"
 assert all(isinstance(k, str) for k, _ in page.src_list.items)
 assert 0x4E not in [k for k, _ in page.dst_list.items], "two-pack Mizuchi must not be offered"
 pick(page.src_list, "04A"); pick(page.dst_list, 0x3D)
+wait_pictures()
+for side, expect in (("src", "DS2 · Angel"), ("dst", "Nocturne · Pixie")):
+    pic = page.pictures[side]
+    assert pic["caption"].kw["text"] == expect and pic["photo"] is not None, (side, pic["caption"].kw)
+print("pictures:", [p["caption"].kw["text"] for p in page.pictures.values()])
 print("reverse verdict:", page.verdict.kw["text"]); print("reverse map:", page.map_text.get())
 assert "add" not in page.add_btn.states and "disabled" not in page.add_btn.states
 page.variants.set(True); page.add()
