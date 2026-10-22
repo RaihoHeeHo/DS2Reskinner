@@ -18,6 +18,8 @@ Commands:
     dds3tool.py isopatch GAME.iso MODDIR OUT.iso [--append]  (recommended for PCSX2)
     dds3tool.py reskin DS2_DIR NOCTURNE_DIR NOCTURNE_ID DS2_ID MODDIR [--move-from SLOT]
     dds3tool.py noc-reskin NOCTURNE_DIR DS2_DIR DS2_ID NOCTURNE_ID MODDIR [--map N=D,...] [--copy] [--variants]
+    dds3tool.py noc-names  NOCTURNE_DIR [MODDIR]
+    dds3tool.py noc-rename NOCTURNE_DIR MODDIR ID=Name [ID=Name ...]
     dds3tool.py add-demon DS2_DIR NOCTURNE_DIR NOCTURNE_ID TEMPLATE_ID RESERVE_ID NAME MODDIR [--level N]
     dds3tool.py menu-model PROGRAM_FILE MODDIR ID [ID ...]
     dds3tool.py names  DS2_DIR [MODDIR]
@@ -1351,9 +1353,10 @@ def put_model_nocturne(noc_dir, ds2_dir, ds2_id, noc_id, moddir, mapping, share=
     so MAPPING ({Nocturne slot: DS2 slot or None}) is applied, and the table is
     sized to the Nocturne model's slot count. With SHARE (the default)
     remapped slots point at the existing animation data, so the model doesn't
-    grow. The model goes into model/devil/... and the battle pack
-    npackl/BU<ID>.LB; with VARIANTS, also into every boss/story pack that
-    carried the same Nocturne model.
+    grow. The model goes into model/devil/0xH0/0xID/0xID.PB, the menu copy
+    model/devil/on/0xID_on.PB (compendium, party status) and the battle pack
+    npackl/BU<ID>.LB; with VARIANTS, also into every boss/story pack and
+    model/devil/boss/ file that carried the same Nocturne model.
     Returns (model bytes, Nocturne path, [(slot, source)]).
     """
     src_path, model = find_ds2_model(ds2_dir, ds2_id)
@@ -1376,9 +1379,20 @@ def put_model_nocturne(noc_dir, ds2_dir, ds2_id, noc_id, moddir, mapping, share=
         print(f"  NOTE: {len(model) - len(base)} bytes bigger than the Nocturne original; "
               "if battles with this demon crash, it is over Nocturne's memory budget")
     write_mod_file(moddir, noc_path, model)
+    menu = nocturne_menu_model_path(noc_dir, noc_id)
+    if menu:
+        # The menu copy shares the textures and animations but packs its
+        # meshes differently (types 7/8 next to 1/2); menus draw 1/2 as well.
+        write_mod_file(moddir, menu, model, " (menus)")
+    else:
+        print(f"  (no menu copy model/devil/on/0x{noc_id:02x}_on.PB; skipped)")
     packs = [noc_id]
     if variants:
         packs = sorted(set(packs) | set(nocturne_packs_with_model(noc_dir, base)))
+        for f in game(noc_dir).files:
+            if f.path.lower().startswith("model/devil/boss/") and f.size == len(base) \
+                    and game(noc_dir).read(f) == base:
+                write_mod_file(moddir, f.path, model, " (boss copy)")
     for pack_id in packs:
         rel = nocturne_pack_path(pack_id)
         if not archive_has(noc_dir, rel):
@@ -1390,6 +1404,145 @@ def put_model_nocturne(noc_dir, ds2_dir, ds2_id, noc_id, moddir, mapping, share=
         write_lb(dest, entries)
         print(f"  {rel} (recompressed)")
     return model, noc_path, filled
+
+
+def nocturne_menu_model_path(noc_dir, noc_id):
+    """Archive path of a demon's menu model (model/devil/on/0x3d_on.PB), or None."""
+    index = game(noc_dir).index
+    for name in (f"0x{noc_id:02x}", f"0x{noc_id:x}"):
+        f = index.get(f"model/devil/on/{name}_on.pb")
+        if f is not None:
+            return f.path
+    return None
+
+
+# ---------------------------------------------------------------- Nocturne names
+#
+# The program file (SLUS_209.11) has a table of pointers to demon names, one
+# per demon ID (0 = "00", 1 = Vishnu, ... 0x3D = Pixie), used by battle, the
+# compendium and the party menus. Renaming points an entry at another string:
+# an identical name already in the program, else a new one written into
+# unused padding (about 128 bytes), else the old name overwritten in place
+# when it is at least as long and no other entry uses it.
+
+NOC_NAME_ANCHORS = ((0x3D, "Pixie"), (0x44, "Angel"))
+NOC_NAME_MAX = 14   # longest name in the original table ("Flauros Hallel")
+
+
+def find_nocturne_name_table(elf):
+    """File offset of the demon name pointer table in Nocturne's program file."""
+    for va, off, size in elf_layout(elf):
+        for pos in range(off, off + size - 4 * 0x45, 4):
+            if all(elf_string_at(elf, struct.unpack_from("<I", elf, pos + 4 * i)[0]) == name
+                   for i, name in NOC_NAME_ANCHORS):
+                return pos
+    sys.exit("error: couldn't find the demon name table in the Nocturne program file")
+
+
+def nocturne_names(elf, table=None):
+    """[(demon ID, name)] from the program file's name table.
+
+    TABLE is the table's file offset; pass it for an already renamed program
+    (the table is found by its original names, but never moves)."""
+    table, out = find_nocturne_name_table(elf) if table is None else table, []
+    for i in range(0x400):
+        name = elf_string_at(elf, struct.unpack_from("<I", elf, table + 4 * i)[0])
+        if name is None:
+            break
+        out.append((i, name))
+    return out
+
+
+def nocturne_rename(elf, renames, table=None):
+    """Program file with name table entries {demon ID: new name} changed; returns (elf, notes).
+    TABLE as in nocturne_names."""
+    elf = bytearray(elf)
+    table = find_nocturne_name_table(bytes(elf)) if table is None else table
+    count = len(nocturne_names(bytes(elf), table))
+    gaps = elf_free_gaps(bytes(elf))
+    notes = []
+    for demon, name in sorted(renames.items()):
+        raw = name.encode("ascii")
+        if not 0 < demon < count:
+            sys.exit(f"error: Nocturne demon IDs go from 0x01 to 0x{count - 1:X}")
+        if not raw or len(raw) > NOC_NAME_MAX:
+            sys.exit(f"error: '{name}' must be 1-{NOC_NAME_MAX} characters for Nocturne")
+        entry = table + 4 * demon
+        old_va = struct.unpack_from("<I", elf, entry)[0]
+        old = elf_string_at(bytes(elf), old_va)
+        if old == name:
+            continue
+        text = raw + b"\0"
+        pos = bytes(elf).find(text)
+        while pos > 0 and elf[pos - 1] != 0:
+            pos = bytes(elf).find(text, pos + 1)
+        if pos > 0:
+            va, how = elf_off_to_va(bytes(elf), pos), "existing string"
+        else:
+            va = None
+            for start, end in gaps:
+                v = start
+                while v + len(text) <= end:
+                    o = elf_va_to_off(bytes(elf), v)
+                    if elf[o:o + len(text)] == bytes(len(text)) and elf[o - 1] == 0:
+                        elf[o:o + len(text)] = text
+                        va, how = v, "new string"
+                        break
+                    v += 1
+                if va is not None:
+                    break
+            if va is None:
+                shared = sum(struct.unpack_from("<I", elf, table + 4 * i)[0] == old_va for i in range(count))
+                if len(raw) <= len(old) and shared == 1:
+                    o = elf_va_to_off(bytes(elf), old_va)
+                    elf[o:o + len(old)] = raw.ljust(len(old), b"\0")
+                    va, how = old_va, "written over the old name"
+                else:
+                    sys.exit(f"error: no room left in the program file for the name '{name}'; "
+                             "pick a name a Nocturne demon already has, or one no longer than the old name")
+        struct.pack_into("<I", elf, entry, va)
+        notes.append(f"0x{demon:02X}: {old} -> {name} ({how})")
+    return bytes(elf), notes
+
+
+def load_program(game_dir, moddir):
+    """(name, bytes) of the program file, from MODDIR if an earlier step changed it."""
+    found = find_program_file(moddir)
+    if found:
+        return os.path.basename(found), open(found, "rb").read()
+    prog = game(game_dir).program_file()
+    if not prog:
+        sys.exit(f"error: no program file (SLUS_...) found for {game_dir}")
+    return prog
+
+
+def nocturne_name_table_offset(noc_dir):
+    """Name table offset, found in the game's own (unrenamed) program file."""
+    prog = game(noc_dir).program_file()
+    if not prog:
+        sys.exit(f"error: no program file (SLUS_...) found for {noc_dir}")
+    return find_nocturne_name_table(prog[1])
+
+
+def cmd_noc_names(args):
+    """noc-names NOCTURNE_DIR [MODDIR]  - list Nocturne demon IDs and names"""
+    _, elf = load_program(args[0], args[1] if len(args) > 1 else "")
+    for i, name in nocturne_names(elf, nocturne_name_table_offset(args[0])):
+        print(f"0x{i:03X}  {name}")
+
+
+def cmd_noc_rename(args):
+    """noc-rename NOCTURNE_DIR MODDIR ID=Name [ID=Name ...]  (writes MODDIR/SLUS_209.11)"""
+    if len(args) < 3:
+        sys.exit('usage: dds3tool.py noc-rename NOCTURNE_DIR MODDIR 0x3D=Angel ["0x5C=Jack Frost" ...]')
+    noc_dir, moddir = args[0], args[1]
+    renames = {}
+    for pair in args[2:]:
+        demon, name = pair.split("=", 1)
+        renames[int(demon, 16)] = name
+    name, elf = load_program(noc_dir, moddir)
+    elf, notes = nocturne_rename(elf, renames, nocturne_name_table_offset(noc_dir))
+    write_mod_file(moddir, name, elf, " (" + "; ".join(notes) + ")" if notes else " (no changes)")
 
 
 def parse_map(text):
@@ -1968,7 +2121,7 @@ def cmd_set_level(args):
 
 def main():
     commands = {"list": cmd_list, "extract": cmd_extract, "patch": cmd_patch, "isopatch": cmd_isopatch,
-                "lb-list": cmd_lb_list, "reskin": cmd_reskin, "noc-reskin": cmd_noc_reskin, "menu-model": cmd_menu_model, "add-demon": cmd_add_demon, "motions": cmd_motions, "bases": cmd_bases, "templates": cmd_templates, "motion-alias": cmd_motion_alias, "names": cmd_names, "rename": cmd_rename, "locks": cmd_locks, "compare": cmd_compare, "set-level": cmd_set_level, "unlock": cmd_unlock, "set-class": cmd_set_class, "bones": cmd_bones, "mht-list": cmd_mht_list, "mht-bones": cmd_mht_bones, "lb-extract": cmd_lb_extract, "lb-replace": cmd_lb_replace}
+                "lb-list": cmd_lb_list, "reskin": cmd_reskin, "noc-reskin": cmd_noc_reskin, "noc-names": cmd_noc_names, "noc-rename": cmd_noc_rename, "menu-model": cmd_menu_model, "add-demon": cmd_add_demon, "motions": cmd_motions, "bases": cmd_bases, "templates": cmd_templates, "motion-alias": cmd_motion_alias, "names": cmd_names, "rename": cmd_rename, "locks": cmd_locks, "compare": cmd_compare, "set-level": cmd_set_level, "unlock": cmd_unlock, "set-class": cmd_set_class, "bones": cmd_bones, "mht-list": cmd_mht_list, "mht-bones": cmd_mht_bones, "lb-extract": cmd_lb_extract, "lb-replace": cmd_lb_replace}
     if len(sys.argv) < 3 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)

@@ -563,7 +563,7 @@ class CustomPage(ttk.Frame):
         if self.animation_preset.get() != "Current suggestions":
             self.apply_preset()
         if rev:
-            self.name.set(r.ds2_name(target)[:20])
+            self.name.set(r.ds2_name(target)[:r.t.NOC_NAME_MAX])
         else:
             self.name.set(tested.name if tested else r.noc_name(noc_id)[:20])
         self.add_btn.state(["!disabled"] if a["usable"] else ["disabled"])
@@ -601,6 +601,9 @@ class CustomPage(ttk.Frame):
             messagebox.showerror(APP, "Animation fixes must look like 6=3,7=4,10=- (DS2=Nocturne; - clears).")
             return
         rev = a.get("direction") == "reverse"
+        if rev and len(name.encode("ascii", "replace")) > r.t.NOC_NAME_MAX:
+            messagebox.showerror(APP, f"Nocturne names can be at most {r.t.NOC_NAME_MAX} characters.")
+            return
         src_game, dst_game = ("DS2", "Nocturne") if rev else ("Nocturne", "DS2")
         have = {i for i, f in enumerate(a["src_frames"]) if f}
         bad = [v for v in mapping.values() if v is not None and v not in have]

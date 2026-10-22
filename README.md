@@ -77,14 +77,22 @@ preset fills every slot the Nocturne demon uses:
 | anything else it uses | DS2's own slot if filled, else the closest-length animation |
 
 Nocturne's empty slots stay empty, and the table is sized to the Nocturne
-model (16 slots for most, up to 26 for some). The model goes into
-`model/devil/0xH0/0xID/0xID.PB` and into the battle pack
-`npackl/BU<ID>.LB`, which holds a second copy. **Also replace its
+model (16 slots for most, up to 26 for some). Nocturne keeps three copies of
+each model and all three are replaced: `model/devil/0xH0/0xID/0xID.PB`, the
+battle pack `npackl/BU<ID>.LB`, and `model/devil/on/0xID_on.PB`, which the
+compendium and party status screens show. **Also replace its
 boss/story versions** puts it into the packs of boss and story versions that
 share the model (Thor 0x12E and 0x151, for example). Aquans, Mizuchi, Gogmagog
 and Hresvelgr play a second animation pack on top of their normal one and
 can't be replaced yet. If a list has swaps in both directions, the build writes
-one modded ISO per game. Names in Nocturne are not changed yet.
+one modded ISO per game.
+
+The **Name in game** field renames the Nocturne demon (14 characters at most)
+in battle, the compendium and menus. Names live in a pointer table in the
+program file (`SLUS_209.11`). A name another Nocturne demon already has costs
+nothing; new names go into about 128 bytes of unused space in the program file
+(roughly ten names), and after that only into the old name's own space.
+Dialogue that mentions a demon by name is not changed.
 
 Every command below also accepts a game ISO wherever it asks for a game
 folder (`ds2`, `nocturne`), so nothing has to be extracted first.
@@ -154,8 +162,13 @@ Without `--map` the "Devil Summoner 2 → Nocturne" preset maps the animations
 (see the GUI section above). `--map 1=4,3=6,9=-` uses **Nocturne slot = DS2
 slot** instead. Remapped slots share the existing animation data, so the model
 doesn't grow; `--copy` gives each its own copy. `--variants` also writes the
-model into boss/story packs that carried the same Nocturne model (it unpacks
-every pack, so it takes longer).
+model into boss/story packs and `model/devil/boss/` files that carried the same
+Nocturne model (it unpacks every pack, so it takes longer).
+
+```
+python3 dds3tool.py noc-names nocturne                    # IDs and names
+python3 dds3tool.py noc-rename nocturne mod 0x3D=Angel    # writes mod/SLUS_209.11
+```
 
 Nocturne battles load demons from `npackl/BU<ID>.LB`: one `PAC` entry holding
 a `BPAC` pack whose entry 0 is a byte-for-byte copy of the demon's PB (true for

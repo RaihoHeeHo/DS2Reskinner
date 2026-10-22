@@ -497,6 +497,10 @@ def build_nocturne(plan, noc_iso, ds2_iso, out_iso, log=print):
             if p.variants:
                 args.append("--variants")
             run(t.cmd_noc_reskin, args)
+        renames = [f"0x{p.noc_id:x}={p.name}" for p in plan if p.name != noc_name(p.noc_id)]
+        if renames:
+            log("Renaming demons ...")
+            run(t.cmd_noc_rename, [noc_iso, mod] + renames)
         log("Writing the modded Nocturne ISO (this copies the whole disc; a few minutes) ...")
         if os.path.exists(out_iso):
             os.remove(out_iso)
