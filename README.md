@@ -31,7 +31,9 @@ Or run `python3 ds2_reskinner.py` anywhere.
 2. Pick a mode:
    - **Auto swap**: every tested swap (29 reskins and 5 new demons).
    - **Manual swap**: tick the tested swaps you want.
-   - **Custom swap**: put any Nocturne demon on any DS2 demon. The program
+   - **Custom swap**: put any Nocturne demon on any DS2 demon, or (with
+     **Direction → Devil Summoner 2 → Nocturne**) any DS2 demon on any
+     Nocturne demon; see [DS2 demons in Nocturne](#ds2-demons-in-nocturne). The program
      compares both models' animation slots, warns about one-animation models,
      missing hit bones, walking demons and story locks, and fills in the
      animation fixes that worked for the tested swaps. You can edit them.
@@ -52,6 +54,37 @@ The editable mapping field uses **DS2 destination = Nocturne source**, so
 slot 10. The slot report shows the resolved mapping before you add the swap.
 
 Start the game from an in-game save, not a PCSX2 save state.
+
+## DS2 demons in Nocturne
+
+In **Custom swap**, choose **Direction → Devil Summoner 2 → Nocturne**, pick a
+DS2 demon and the Nocturne demon it replaces. Both games use the same model
+format, so the model and its textures go over unchanged; what changes is the
+animation table, because the slot numbers mean different things (DS2 slot 1 is
+a walk, Nocturne slot 1 is getting hit). The **Devil Summoner 2 → Nocturne**
+preset fills every slot the Nocturne demon uses:
+
+| Nocturne slot | DS2 source, in order of preference |
+|---|---|
+| 0 idle | 0 idle |
+| 1 hit | 4 hit, 12 staggered short, 5 staggered long |
+| 2 injured | 2 injured |
+| 3 / 12 physical attack | 6 physical attack, 9 lunge |
+| 8 physical attack 2 | 9 lunge, 6 physical attack |
+| 4 / 5 / 7 / 11 casts | 7, 8, 11 (different ones where possible) |
+| 13 idle 2 | 0 idle, 15 victory |
+| 14 / 15 negotiation | 13 summoned / 15 victory, then idle |
+| anything else it uses | DS2's own slot if filled, else the closest-length animation |
+
+Nocturne's empty slots stay empty, and the table is sized to the Nocturne
+model (16 slots for most, up to 26 for some). The model goes into
+`model/devil/0xH0/0xID/0xID.PB` and into the battle pack
+`npackl/BU<ID>.LB`, which holds a second copy. **Also replace its
+boss/story versions** puts it into the packs of boss and story versions that
+share the model (Thor 0x12E and 0x151, for example). Aquans, Mizuchi, Gogmagog
+and Hresvelgr play a second animation pack on top of their normal one and
+can't be replaced yet. If a list has swaps in both directions, the build writes
+one modded ISO per game. Names in Nocturne are not changed yet.
 
 Every command below also accepts a game ISO wherever it asks for a game
 folder (`ds2`, `nocturne`), so nothing has to be extracted first.
@@ -110,7 +143,32 @@ reskins can go into the same `mod` folder before running `isopatch` once.
 Test from an in-game save, not a PCSX2 save state: a save state brings back
 models that were already loaded.
 
-## Add a new demon in an unused reserve slot
+## Put a DS2 demon into Nocturne (one command)
+
+```
+python3 dds3tool.py noc-reskin nocturne ds2 04A 0x3D mod     # DS2 Angel -> Nocturne Pixie
+python3 dds3tool.py isopatch Nocturne.iso mod ~/Desktop/Nocturne_mod.iso
+```
+
+Without `--map` the "Devil Summoner 2 → Nocturne" preset maps the animations
+(see the GUI section above). `--map 1=4,3=6,9=-` uses **Nocturne slot = DS2
+slot** instead. Remapped slots share the existing animation data, so the model
+doesn't grow; `--copy` gives each its own copy. `--variants` also writes the
+model into boss/story packs that carried the same Nocturne model (it unpacks
+every pack, so it takes longer).
+
+Nocturne battles load demons from `npackl/BU<ID>.LB`: one `PAC` entry holding
+a `BPAC` pack whose entry 0 is a byte-for-byte copy of the demon's PB (true for
+all 189 demon models) and whose other entries are the demon's battle effects:
+
+```
++0x00 u32 0      +0x04 u32 size after the header   +0x08 "BPAC"   +0x0C u32 0
++0x10 u32 count  +0x14 u32 1, u32 0, u32 0
++0x20 count × { u32 tag (0 model, 1/2 effects), u32 size, u32 1, u32 offset }
+header padded to 16 bytes; entries follow back to back
+```
+
+
 
 DS2's demon list has unused "reserve" slots (Pyro reserve 1 = 012, Frost
 reserve 1 = 029, Volt reserve 1 = 03D, Spirit reserve 1 = 0A8...). This turns

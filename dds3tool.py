@@ -17,6 +17,7 @@ Commands:
     dds3tool.py patch   DDS3.DDT DDS3.IMG MODDIR OUTDIR [--in-place]
     dds3tool.py isopatch GAME.iso MODDIR OUT.iso [--append]  (recommended for PCSX2)
     dds3tool.py reskin DS2_DIR NOCTURNE_DIR NOCTURNE_ID DS2_ID MODDIR [--move-from SLOT]
+    dds3tool.py noc-reskin NOCTURNE_DIR DS2_DIR DS2_ID NOCTURNE_ID MODDIR [--map N=D,...] [--copy] [--variants]
     dds3tool.py add-demon DS2_DIR NOCTURNE_DIR NOCTURNE_ID TEMPLATE_ID RESERVE_ID NAME MODDIR [--level N]
     dds3tool.py menu-model PROGRAM_FILE MODDIR ID [ID ...]
     dds3tool.py names  DS2_DIR [MODDIR]
@@ -635,6 +636,40 @@ def extend_motion_slots(model, count):
     return pb_replace_chunk(bytes(model), "MT00", bytes(chunk))
 
 
+def shrink_motion_slots(model, count):
+    """Cut MT00's slot table down to COUNT entries (the reverse of extend_motion_slots).
+
+    DS2 models have 17 slots, Nocturne models 16. Only the header count and
+    the dropped table entries change: the dropped words become padding and no
+    animation data moves, so every other offset stays valid. The animation a
+    dropped slot played stays in the file, unreferenced.
+    """
+    table, slots = motion_slots(model)
+    if table is None or count >= len(slots):
+        return bytes(model)
+    mt = pb_chunks(model)["MT00"]
+    size = struct.unpack_from("<i", model, mt + 4)[0]
+    chunk = bytearray(model[mt:mt + size])
+    tpos = table - mt
+    struct.pack_into(f"<{len(slots) - count}I", chunk, tpos + 4 * count, *([0] * (len(slots) - count)))
+    struct.pack_into("<H", chunk, 0x20, count)
+    rebuild_motion_reloc(chunk)
+    return pb_replace_chunk(bytes(model), "MT00", bytes(chunk))
+
+
+def chunk_count(data, magic):
+    """How many chunks of type MAGIC a PB has (pb_chunks only remembers the last)."""
+    pos, n = 0, 0
+    while pos + 16 <= len(data):
+        kind, size, m = struct.unpack_from("<Ii4s", data, pos)
+        n += m.decode("ascii", "replace") == magic
+        if kind == 255 or size <= 0:
+            break
+        pos += size
+        pos += -pos % 64
+    return n
+
+
 def encode_reloc(positions):
     """MT00 ends with a packed list of the words the game turns from offsets into
     pointers at load time (the header's table offset and every non-empty slot).
@@ -1188,6 +1223,209 @@ def cmd_reskin(args):
     print("Done. Next: dds3tool.py isopatch DS2.ISO", moddir, "OUT.iso")
 
 
+def find_ds2_model(ds2_dir, demon_id):
+    """A DS2 demon's model: model/devil/<ID>.PB, else entry 0 of its battle LB."""
+    rel = f"model/devil/{demon_id:03X}.PB"
+    if archive_has(ds2_dir, rel):
+        return rel, read_archive_file(ds2_dir, rel)
+    rel = f"model_lb/devil_b/{demon_id:03X}.LB"
+    if archive_has(ds2_dir, rel):
+        import tempfile
+        fd, tmp = tempfile.mkstemp(suffix=".LB")
+        os.close(fd)
+        try:
+            with open(tmp, "wb") as f:
+                f.write(read_archive_file(ds2_dir, rel))
+            entries = read_lb(tmp)
+        finally:
+            os.remove(tmp)
+        if entries and entries[0].kind == "PBN":
+            return rel + " (entry 0)", entries[0].data
+    sys.exit(f"error: no DS2 model for demon {demon_id:03X}")
+
+
+# ---------------------------------------------------------------- Nocturne battle packs
+#
+# Nocturne battles load each demon from npackl/BU<ID>.LB: one LB entry
+# (type PAC) holding a BPAC pack. Entry 0 of the pack is a byte-for-byte copy
+# of model/devil/0xH0/0xID/0xID.PB; the rest are the demon's battle effect
+# files. Boss and story versions (IDs 0x100 and up) have their own packs with
+# another copy of the same model.
+#     +0x00 u32 0          +0x04 u32 size after the header   +0x08 "BPAC"
+#     +0x0C u32 0          +0x10 u32 entry count             +0x14 u32 1, u32 0, u32 0
+#     +0x20 entries, 16 bytes each: u32 tag (0 model, 1/2 effects), u32 size,
+#           u32 1, u32 offset from the start of the pack
+# The header is padded to 16 bytes and the entries follow back to back.
+
+def read_pac(data):
+    """[(tag, flag, bytes)] for every entry of a BPAC pack."""
+    if data[8:12] != b"BPAC":
+        sys.exit("error: not a BPAC pack")
+    count = struct.unpack_from("<I", data, 0x10)[0]
+    out = []
+    for i in range(count):
+        tag, size, flag, off = struct.unpack_from("<4I", data, 0x20 + 16 * i)
+        out.append((tag, flag, bytes(data[off:off + size])))
+    return out
+
+
+def write_pac(entries, template):
+    """Build a BPAC pack from [(tag, flag, bytes)], copying TEMPLATE's header fields."""
+    count = len(entries)
+    head = (0x20 + 16 * count + 15) & ~15
+    out = bytearray(head)
+    out[:0x20] = template[:0x20]
+    struct.pack_into("<I", out, 0x10, count)
+    pos = head
+    body = bytearray()
+    for i, (tag, flag, blob) in enumerate(entries):
+        struct.pack_into("<4I", out, 0x20 + 16 * i, tag, len(blob), flag, pos)
+        body += blob + bytes(-len(blob) % 16)
+        pos = head + len(body)
+    struct.pack_into("<I", out, 4, len(body))
+    return bytes(out + body)
+
+
+def nocturne_pack_path(demon_id):
+    return f"npackl/BU{demon_id:03X}.LB"
+
+
+def read_lb_bytes(data):
+    import tempfile
+    fd, tmp = tempfile.mkstemp(suffix=".LB")
+    os.close(fd)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        return read_lb(tmp)
+    finally:
+        os.remove(tmp)
+
+
+def nocturne_packs_with_model(noc_dir, model):
+    """IDs of every battle pack whose model entry is exactly MODEL (slow: unpacks all packs)."""
+    hits = []
+    for f in game(noc_dir).files:
+        p = f.path
+        if not (p.startswith("npackl/BU") and p.upper().endswith(".LB")):
+            continue
+        entries = read_lb_bytes(game(noc_dir).read(f))
+        if entries and entries[0].kind == "PAC":
+            pac = read_pac(entries[0].data)
+            if pac and pac[0][2] == model:
+                hits.append(int(p[9:-3], 16))
+    return sorted(hits)
+
+
+def replace_pack_model(noc_dir, pack_id, model):
+    """The battle LB for PACK_ID with its pack's model entry replaced by MODEL (bytes)."""
+    rel = nocturne_pack_path(pack_id)
+    entries = read_lb_bytes(read_archive_file(noc_dir, rel))
+    if not entries or entries[0].kind != "PAC":
+        sys.exit(f"error: {rel} doesn't start with a PAC entry")
+    pac = read_pac(entries[0].data)
+    tag, flag, _ = pac[0]
+    pac[0] = (tag, flag, bytes(model))
+    entries[0].data = write_pac(pac, entries[0].data)
+    return rel, entries
+
+
+def retarget_motion_table(model, base, mapping, share=True):
+    """MODEL with MAPPING ({BASE slot: MODEL slot or None}) applied and its slot
+    table sized to BASE's (grown for Nocturne models with 18+ slots, cut from
+    DS2's 17 to Nocturne's usual 16). Sources always refer to MODEL's original
+    slots, so a slot that is cleared or remapped can still feed others.
+    Returns (new model, [(slot, source)])."""
+    _, base_slots = motion_slots(base)
+    model = extend_motion_slots(model, len(base_slots))
+    model, filled = fill_motion_slots(model, base, dict(mapping), extend=False, share=share)
+    return shrink_motion_slots(model, len(base_slots)), filled
+
+
+def put_model_nocturne(noc_dir, ds2_dir, ds2_id, noc_id, moddir, mapping, share=True, variants=False):
+    """Write DS2 demon DS2_ID's model over Nocturne demon NOC_ID's model.
+
+    Both games use the same PB format, so the model itself goes over as is.
+    What has to change is the animation table: the slot numbers mean different
+    actions in each game (DS2 slot 1 is a walk, Nocturne slot 1 is getting hit),
+    so MAPPING ({Nocturne slot: DS2 slot or None}) is applied, and the table is
+    sized to the Nocturne model's slot count. With SHARE (the default)
+    remapped slots point at the existing animation data, so the model doesn't
+    grow. The model goes into model/devil/... and the battle pack
+    npackl/BU<ID>.LB; with VARIANTS, also into every boss/story pack that
+    carried the same Nocturne model.
+    Returns (model bytes, Nocturne path, [(slot, source)]).
+    """
+    src_path, model = find_ds2_model(ds2_dir, ds2_id)
+    noc_path = find_nocturne_model(noc_dir, noc_id)
+    base = read_archive_file(noc_dir, noc_path)
+    print(f"DS2 {src_path} ({len(model)} bytes) -> Nocturne {noc_path} ({len(base)} bytes)")
+    if chunk_count(model, "MT00") > 1:
+        sys.exit(f"error: DS2 {ds2_id:03X} has several animation packs; only single-pack models are supported")
+    if chunk_count(base, "MT00") > 1:
+        # Aquans, Mizuchi, Gogmagog, Hresvelgr: a 16-slot pack plus a 1-slot
+        # pack the game plays on top. A DS2 model has nothing for the second.
+        sys.exit(f"error: Nocturne 0x{noc_id:02X} has two animation packs; it can't be replaced yet")
+    model, filled = retarget_motion_table(model, base, mapping, share)
+    for slot, pick in filled:
+        if pick is None:
+            print(f"  animation slot {slot} left empty")
+        else:
+            print(f"  animation slot {slot} now plays DS2 slot {pick}{'' if share else ' (copy)'}")
+    if len(model) > len(base):
+        print(f"  NOTE: {len(model) - len(base)} bytes bigger than the Nocturne original; "
+              "if battles with this demon crash, it is over Nocturne's memory budget")
+    write_mod_file(moddir, noc_path, model)
+    packs = [noc_id]
+    if variants:
+        packs = sorted(set(packs) | set(nocturne_packs_with_model(noc_dir, base)))
+    for pack_id in packs:
+        rel = nocturne_pack_path(pack_id)
+        if not archive_has(noc_dir, rel):
+            print(f"  ({rel} doesn't exist in this game; skipped)")
+            continue
+        rel, entries = replace_pack_model(noc_dir, pack_id, model)
+        dest = os.path.join(moddir, rel)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        write_lb(dest, entries)
+        print(f"  {rel} (recompressed)")
+    return model, noc_path, filled
+
+
+def parse_map(text):
+    return {int(a): None if b == "-" else int(b) for a, b in (p.split("=") for p in text.split(","))}
+
+
+def cmd_noc_reskin(args):
+    """noc-reskin NOCTURNE_DIR DS2_DIR DS2_ID NOCTURNE_ID MODDIR [--map 1=4,3=6] [--copy] [--variants]
+
+    Puts DS2 demon DS2_ID's model and animations into Nocturne demon
+    NOCTURNE_ID's slot (model/devil/... and the battle pack npackl/BU<ID>.LB).
+    Without --map, the "Devil Summoner 2 -> Nocturne" animation preset picks a
+    DS2 animation for every slot Nocturne uses. --variants also replaces the
+    model in boss/story packs that use the same Nocturne model.
+    """
+    copy = "--copy" in args
+    variants = "--variants" in args
+    args = [a for a in args if a not in ("--copy", "--variants")]
+    args, mapping = pop_option(args, "--map")
+    if len(args) != 5:
+        sys.exit("usage: dds3tool.py noc-reskin NOCTURNE_DIR DS2_DIR DS2_ID NOCTURNE_ID MODDIR [--map 1=4,3=6] [--copy] [--variants]\n"
+                 "  e.g. dds3tool.py noc-reskin nocturne ds2 04A 0x42 mod   (DS2 Angel -> Nocturne Principality)")
+    noc_dir, ds2_dir, ds2_id, noc_id, moddir = args
+    ds2_id, noc_id = int(ds2_id, 16), int(noc_id, 16)
+    if mapping:
+        mapping = parse_map(mapping)
+    else:
+        import ds2reskin   # the presets live with the GUI engine
+        _, ds2_model = find_ds2_model(ds2_dir, ds2_id)
+        base = read_archive_file(noc_dir, find_nocturne_model(noc_dir, noc_id))
+        mapping, _ = ds2reskin.preset_map(ds2reskin.REVERSE_PRESET,
+                                          ds2reskin.slot_frames(base), ds2reskin.slot_frames(ds2_model))
+    put_model_nocturne(noc_dir, ds2_dir, ds2_id, noc_id, moddir, mapping, share=not copy, variants=variants)
+    print("Done. Next: dds3tool.py isopatch NOCTURNE.ISO", moddir, "OUT.iso")
+
+
 SB_MOTIONMV = "battle/SB_MOTIONMV.TBL"
 # Tables with one fixed-size entry per demon ID, copied by add-demon.
 PER_DEMON_TABLES = (
@@ -1579,14 +1817,7 @@ def cmd_isopatch(args):
         print(f"DDS3.DDT at sector {ddt_file.lsn}, DDS3.IMG at sector {img_file.lsn} ({img_file.size} bytes)")
 
         iso.seek(ddt_file.lsn * SECTOR)
-        ddt = bytearray(iso.read(ddt_file.size))
-        tmp_ddt = out_iso + ".ddt.tmp"
-        with open(tmp_ddt, "wb") as f:
-            f.write(ddt)
-        try:
-            ddt, files = read_ddt(tmp_ddt)
-        finally:
-            os.remove(tmp_ddt)
+        ddt, files = parse_ddt(iso.read(ddt_file.size))
         replacements = collect_replacements(files, moddir, allow_empty=True)
 
         iso.seek(0, os.SEEK_END)
@@ -1737,7 +1968,7 @@ def cmd_set_level(args):
 
 def main():
     commands = {"list": cmd_list, "extract": cmd_extract, "patch": cmd_patch, "isopatch": cmd_isopatch,
-                "lb-list": cmd_lb_list, "reskin": cmd_reskin, "menu-model": cmd_menu_model, "add-demon": cmd_add_demon, "motions": cmd_motions, "bases": cmd_bases, "templates": cmd_templates, "motion-alias": cmd_motion_alias, "names": cmd_names, "rename": cmd_rename, "locks": cmd_locks, "compare": cmd_compare, "set-level": cmd_set_level, "unlock": cmd_unlock, "set-class": cmd_set_class, "bones": cmd_bones, "mht-list": cmd_mht_list, "mht-bones": cmd_mht_bones, "lb-extract": cmd_lb_extract, "lb-replace": cmd_lb_replace}
+                "lb-list": cmd_lb_list, "reskin": cmd_reskin, "noc-reskin": cmd_noc_reskin, "menu-model": cmd_menu_model, "add-demon": cmd_add_demon, "motions": cmd_motions, "bases": cmd_bases, "templates": cmd_templates, "motion-alias": cmd_motion_alias, "names": cmd_names, "rename": cmd_rename, "locks": cmd_locks, "compare": cmd_compare, "set-level": cmd_set_level, "unlock": cmd_unlock, "set-class": cmd_set_class, "bones": cmd_bones, "mht-list": cmd_mht_list, "mht-bones": cmd_mht_bones, "lb-extract": cmd_lb_extract, "lb-replace": cmd_lb_replace}
     if len(sys.argv) < 3 or sys.argv[1] not in commands:
         print(__doc__)
         sys.exit(1)

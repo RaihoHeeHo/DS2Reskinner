@@ -54,6 +54,26 @@ class NewDemon:
                 f"{self.reserve}, level {self.level}, based on {ds2_name(self.template)}")
 
 
+class NocReskin:
+    """A Devil Summoner 2 demon put into Nocturne (the reverse direction)."""
+    kind = "noc"
+
+    def __init__(self, name, ds2_id, noc_id, map=None, share=True, variants=False, note=""):
+        self.name, self.ds2_id, self.noc_id = name, ds2_id, noc_id
+        self.map = dict(map or {})
+        self.share, self.variants, self.note = share, variants, note
+        self.unlock = False
+
+    @property
+    def slot(self):
+        return f"N{self.noc_id:03X}"   # never clashes with a DS2 slot ID
+
+    def describe(self):
+        extra = " and its boss/story versions" if self.variants else ""
+        return (f"{self.name} (DS2 {self.ds2_id}) replaces Nocturne {noc_name(self.noc_id)} "
+                f"(0x{self.noc_id:02X}){extra}")
+
+
 def m(text):
     return {int(a): None if b == "-" else int(b)
             for a, b in (p.split("=") for p in text.split(","))} if text else {}
@@ -188,7 +208,7 @@ def ds2_slots(ds2):
     out = {}
     for demon in range(1, min(count, 0xC0)):
         tid = f"{demon:03X}"
-        if f"model/devil/{tid}.pb" in g.index:
+        if f"model/devil/{tid}.pb".lower() in g.index:   # the index is lower-case (04a)
             name = tbl[base + demon * t.NAME_LEN: base + (demon + 1) * t.NAME_LEN].split(b"\0")[0]
             out[tid] = name.decode("ascii", "replace") or tid
     return out
@@ -211,12 +231,39 @@ def slot_frames(model):
     return [t.motion_frames(model, s) if s else None for s in slots]
 
 
+FORWARD_PRESET = "Nocturne → Devil Summoner 2"
+REVERSE_PRESET = "Devil Summoner 2 → Nocturne"
+
+# Per preset: "prefs" {destination slot: source slots in order of preference};
+# "distinct" {destination: other destinations whose picks it should avoid
+# repeating while another candidate exists}; "fallback": what a populated
+# destination slot with no rule gets when the incoming model leaves that slot
+# empty (None: stays empty; "closest": the source animation closest in length).
+#
+# Slot meanings (preview labels): DS2 0 idle, 1 walk, 2 injured, 4 hit,
+# 5 staggered long, 6 physical attack, 7/8 cast, 9 lunge, 11 concentrating,
+# 12 staggered short, 13 summoned, 14 returned, 15 victory. Nocturne 0 idle,
+# 1 hit, 2 injured, 3/8/12 physical attacks, 4/5/7/11 casts, 13 idle 2,
+# 14/15 negotiation; 6, 9, 10 and 16+ are unlabeled.
 ANIMATION_PRESETS = {
-    "Nocturne → Devil Summoner 2": {
-        0: (0,), 1: (2,), 2: (2,), 3: (3,), 4: (1,), 5: (1,),
-        6: (3, 8, 12), 7: (4, 5, 7, 11), 8: (4, 5, 7, 11),
-        9: (3, 8, 12), 10: (9, 10), 11: (4, 5, 7, 11),
-        13: (0, 12), 14: (0, 12), 15: (3, 4, 5, 7, 8, 11),
+    FORWARD_PRESET: {
+        "prefs": {
+            0: (0,), 1: (2,), 2: (2,), 3: (3,), 4: (1,), 5: (1,),
+            6: (3, 8, 12), 7: (4, 5, 7, 11), 8: (4, 5, 7, 11),
+            9: (3, 8, 12), 10: (9, 10), 11: (4, 5, 7, 11),
+            13: (0, 12), 14: (0, 12), 15: (3, 4, 5, 7, 8, 11),
+        },
+        "distinct": {11: (7, 8)},
+        "fallback": None,
+    },
+    REVERSE_PRESET: {
+        "prefs": {
+            0: (0,), 1: (4, 12, 5), 2: (2,), 3: (6, 9), 4: (7, 8, 11), 5: (8, 7, 11),
+            7: (11, 7, 8), 8: (9, 6), 11: (7, 8, 11), 12: (6, 9),
+            13: (0, 15), 14: (13, 15, 0), 15: (15, 13, 0),
+        },
+        "distinct": {5: (4,), 7: (4, 5), 11: (4, 5, 7), 8: (3,), 12: (3, 8)},
+        "fallback": "closest",
     },
 }
 
@@ -226,30 +273,42 @@ def preset_map(name, base_frames, noc_frames):
 
     BASE_FRAMES is the destination game's original table: its empty slots
     stay empty. None explicitly clears an incoming animation from that slot.
+    NOC_FRAMES is the incoming model's table (whichever game it comes from).
     """
-    preferences = ANIMATION_PRESETS[name]
+    spec = ANIMATION_PRESETS[name]
+    preferences, distinct, fallback = spec["prefs"], spec.get("distinct", {}), spec.get("fallback")
     mapping, reasons = {}, {}
 
     def occupied(frames, slot):
         return slot < len(frames) and frames[slot] is not None
 
+    have = [i for i in range(len(noc_frames)) if occupied(noc_frames, i)]
     for dst in range(max(len(base_frames), len(noc_frames))):
-        base_empty = not occupied(base_frames, dst)
-        if base_empty:
+        if not occupied(base_frames, dst):
             mapping[dst] = None
             reasons[dst] = "kept empty by preset"
             continue
         if dst not in preferences:
+            if fallback == "closest" and not occupied(noc_frames, dst) and have:
+                want = base_frames[dst]
+                source = min(have, key=lambda j: abs(noc_frames[j] - want))
+                mapping[dst] = source
+                reasons[dst] = f"no rule; closest length: plays slot {source}"
             continue
         candidates = [src for src in preferences[dst] if occupied(noc_frames, src)]
-        if dst == 11:
-            used_casts = {mapping.get(7), mapping.get(8)}
-            different = [src for src in candidates if src not in used_casts]
-            candidates = different or candidates
+        if dst in distinct:
+            used = {mapping.get(other) for other in distinct[dst]}
+            candidates = [src for src in candidates if src not in used] or candidates
         source = candidates[0] if candidates else None
+        what = "Nocturne" if name == FORWARD_PRESET else "DS2"
+        if source is None and fallback == "closest" and have:
+            source = min(have, key=lambda j: abs(noc_frames[j] - base_frames[dst]))
+            mapping[dst] = source
+            reasons[dst] = f"no preferred {what} animation; closest length: plays slot {source}"
+            continue
         mapping[dst] = source
-        reasons[dst] = (f"preset: plays Nocturne slot {source}" if source is not None
-                        else "left empty: no preferred Nocturne animation available")
+        reasons[dst] = (f"preset: plays {what} slot {source}" if source is not None
+                        else f"left empty: no preferred {what} animation available")
     return mapping, reasons
 
 
@@ -334,8 +393,9 @@ def analyze(ds2, noc, noc_id, target):
             score -= 1
         score = max(score, 1)
     return {
-        "noc_id": noc_id, "target": target,
+        "direction": "forward", "noc_id": noc_id, "target": target,
         "base_frames": base_frames, "noc_frames": noc_frames,
+        "dst_frames": base_frames, "src_frames": noc_frames,
         "map": mapping, "reasons": reasons,
         "warnings": warnings, "notes": notes, "usable": usable and score > 0,
         "score": score, "noc_bones": noc_bones, "base_bones": base_bones, "hit_bones": hit_bones,
@@ -343,10 +403,134 @@ def analyze(ds2, noc, noc_id, target):
     }
 
 
+def nocturne_targets(noc):
+    """{noc_id: path} for Nocturne demons a DS2 model can replace (one animation pack)."""
+    out = {}
+    for noc_id, path in nocturne_models(noc).items():
+        if t.chunk_count(t.read_archive_file(noc, path), "MT00") == 1:
+            out[noc_id] = path
+    return out
+
+
+def analyze_reverse(ds2, noc, ds2_id, noc_id):
+    """What the custom-swap screen shows for DS2 demon DS2_ID -> Nocturne demon NOC_ID."""
+    models = nocturne_models(noc)
+    if noc_id not in models:
+        raise ValueError(f"Nocturne has no model for 0x{noc_id:02X}.")
+    base_model = t.read_archive_file(noc, models[noc_id])
+    _, src_model = quiet(t.find_ds2_model, ds2, int(ds2_id, 16))
+    dst_frames, src_frames = slot_frames(base_model), slot_frames(src_model)
+    mapping, reasons = preset_map(REVERSE_PRESET, dst_frames, src_frames)
+
+    warnings, notes = [], []
+    n_anims = sum(1 for f in src_frames if f)
+    usable = n_anims >= 3
+    if not usable:
+        warnings.append(f"The DS2 model has only {n_anims} animation(s); it would play the same "
+                        "motion for everything. Not usable.")
+    if t.chunk_count(src_model, "MT00") > 1:
+        usable = False
+        warnings.append("The DS2 model has two animation packs, which isn't supported yet.")
+    if t.chunk_count(base_model, "MT00") > 1:
+        usable = False
+        warnings.append("This Nocturne demon plays a second animation pack on top of its normal one "
+                        "(Aquans, Mizuchi, Gogmagog, Hresvelgr); it can't be replaced yet.")
+    if len(dst_frames) > len(src_frames):
+        notes.append(f"This Nocturne model has {len(dst_frames)} animation slots (DS2 has "
+                     f"{len(src_frames)}); the extra ones get the closest-length DS2 animation.")
+    guessed = [d for d, why in reasons.items() if "closest length" in why]
+    if guessed:
+        notes.append(f"Slot(s) {guessed} have no matching DS2 action; they play the closest-length animation.")
+    grow = len(src_model) - len(base_model)
+    if grow > 0:
+        notes.append(f"The DS2 model is {grow // 1024} KB bigger than the Nocturne one; if battles "
+                     "with it crash, it is over Nocturne's memory budget.")
+    if noc_id >= 0x100:
+        notes.append("This is a boss/story version.")
+    score = 3
+    if not usable:
+        score = 0
+    else:
+        if guessed:
+            score -= 1
+        if grow > 0:
+            score -= 1
+        score = max(score, 1)
+    return {
+        "direction": "reverse", "noc_id": noc_id, "target": ds2_id,
+        "dst_frames": dst_frames, "src_frames": src_frames,
+        "map": mapping, "reasons": reasons,
+        "warnings": warnings, "notes": notes, "usable": usable and score > 0, "score": score,
+        "noc_bones": len(t.pb_skeleton(base_model)), "base_bones": len(t.pb_skeleton(src_model)),
+        "noc_size": len(base_model), "base_size": len(src_model),
+    }
+
+
+def check_nocturne_iso(path):
+    g = check_nocturne(path)
+    if not any(f.path.startswith("npackl/BU") for f in g.files):
+        raise ValueError("This Nocturne copy has no npackl/ battle packs (expected the North American SLUS_209.11).")
+    return g
+
+
+def build_nocturne(plan, noc_iso, ds2_iso, out_iso, log=print):
+    """Apply the NocReskin entries in PLAN to a copy of NOC_ISO, writing OUT_ISO."""
+    plan = [p for p in plan if p.kind == "noc"]
+    check_nocturne_iso(noc_iso)
+    check_ds2(ds2_iso)
+    slots = [p.slot for p in plan]
+    dupes = sorted({s for s in slots if slots.count(s) > 1})
+    if dupes:
+        raise ValueError(f"Two swaps replace the same Nocturne demon: {', '.join(dupes)}")
+    if os.path.abspath(out_iso) == os.path.abspath(noc_iso):
+        raise ValueError("Choose a different file for the modded ISO; the original stays untouched.")
+    work = tempfile.mkdtemp(prefix="nocreskin_")
+    mod = os.path.join(work, "mod")
+    run = _runner(log)
+    try:
+        for i, p in enumerate(plan, 1):
+            log(f"[{i}/{len(plan)}] {p.describe()}")
+            args = [noc_iso, ds2_iso, p.ds2_id, f"0x{p.noc_id:x}", mod,
+                    "--map", ",".join(f"{k}={v if v is not None else '-'}" for k, v in sorted(p.map.items()))]
+            if not p.share:
+                args.append("--copy")
+            if p.variants:
+                args.append("--variants")
+            run(t.cmd_noc_reskin, args)
+        log("Writing the modded Nocturne ISO (this copies the whole disc; a few minutes) ...")
+        if os.path.exists(out_iso):
+            os.remove(out_iso)
+        run(t.cmd_isopatch, [noc_iso, mod, out_iso])
+        log(f"Done: {out_iso}")
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+
+
+def _runner(log):
+    """run(cmd, args): call a dds3tool command, sending its output to LOG line by line."""
+    class Writer(io.TextIOBase):
+        def write(self, text):
+            for line in text.splitlines():
+                if line.strip():
+                    log(line)
+            return len(text)
+
+    def run(cmd, args):
+        try:
+            with contextlib.redirect_stdout(Writer()):
+                cmd(args)
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                raise ValueError(str(e.code).replace("error: ", "")) from None
+    return run
+
+
 # ---------------------------------------------------------------- Build
 
 def build(plan, ds2_iso, noc_iso, out_iso, log=print, extra_levels=None):
-    """Apply PLAN (a list of Reskin/NewDemon) to a copy of DS2_ISO, writing OUT_ISO."""
+    """Apply PLAN (a list of Reskin/NewDemon) to a copy of DS2_ISO, writing OUT_ISO.
+    NocReskin entries (DS2 -> Nocturne) are left to build_nocturne."""
+    plan = [p for p in plan if p.kind != "noc"]
     check_ds2(ds2_iso)
     check_nocturne(noc_iso)
     slots = [p.slot for p in plan]

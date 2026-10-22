@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DS2 Reskinner - put Nocturne demons into Devil Summoner 2.
+"""DS2 Reskinner - swap demon models between Nocturne and Devil Summoner 2.
 
 Pick both game ISOs, choose Auto, Manual or Custom, and it writes a modded copy
 of the Devil Summoner 2 ISO. The original ISOs are never changed.
@@ -187,9 +187,9 @@ class ModePage(ttk.Frame):
             ("manual", "Manual swap",
              "Pick which of the tested swaps you want. Anything you leave out stays as the original DS2 demon."),
             ("custom", "Custom swap",
-             "Put any Nocturne demon on any DS2 demon. The program compares the two models, warns about "
-             "problems, and suggests the animation fixes that worked for the tested swaps. Untested swaps "
-             "can still misbehave in game."),
+             "Put any Nocturne demon on any DS2 demon, or any DS2 demon on any Nocturne demon. The program "
+             "compares the two models, warns about problems, and maps the animations between the two games' "
+             "slots. Untested swaps can still misbehave in game."),
         ]
         for value, title, text in options:
             card = ttk.Frame(self, padding=(4, 10))
@@ -285,7 +285,8 @@ class SearchList(ttk.Frame):
 
     def __init__(self, parent, title, on_select):
         super().__init__(parent)
-        ttk.Label(self, text=title, font=("Helvetica", 12, "bold")).pack(anchor="w")
+        self.title_label = ttk.Label(self, text=title, font=("Helvetica", 12, "bold"))
+        self.title_label.pack(anchor="w")
         self.filter = tk.StringVar()
         self.filter.trace_add("write", lambda *_: self.refill())
         ttk.Entry(self, textvariable=self.filter).pack(fill="x", pady=(2, 4))
@@ -302,6 +303,9 @@ class SearchList(ttk.Frame):
     def set_items(self, items):
         self.items = items
         self.refill()
+
+    def set_title(self, title):
+        self.title_label.configure(text=title)
 
     def refill(self):
         f = self.filter.get().lower()
@@ -322,19 +326,27 @@ class CustomPage(ttk.Frame):
         self.analysis = None
         self.loaded_for = None
         header(self, "3. Custom swaps",
-               "Pick a Nocturne demon and the DS2 demon it should replace, check the report, then add it "
-               "to your list. Tested swaps can be added in one click.")
+               "Pick a demon and the one it should replace, check the report, then add it to your list. "
+               "Swaps in both directions can go in one list; each game gets its own modded ISO. "
+               "Tested swaps can be added in one click.")
         nav(self, lambda: app.show("ModePage"), self.go_next)
+        top = ttk.Frame(self)
+        top.pack(fill="x", pady=(0, 6))
+        ttk.Label(top, text="Direction", font=("Helvetica", 12, "bold")).pack(side="left")
+        self.direction = tk.StringVar(value=r.FORWARD_PRESET)
+        for value in (r.FORWARD_PRESET, r.REVERSE_PRESET):
+            ttk.Radiobutton(top, text=value, value=value, variable=self.direction,
+                            command=self.on_direction).pack(side="left", padx=(10, 0))
 
         body = ttk.Panedwindow(self, orient="horizontal")
         body.pack(fill="both", expand=True)
 
         # Left: pickers
         left = ttk.Frame(body, padding=(0, 0, 8, 0), width=240)
-        self.noc_list = SearchList(left, "Nocturne demon", lambda k: self.analyze())
-        self.noc_list.pack(fill="both", expand=True)
-        self.ds2_list = SearchList(left, "Replaces DS2 demon", lambda k: self.analyze())
-        self.ds2_list.pack(fill="both", expand=True, pady=(8, 0))
+        self.src_list = SearchList(left, "Nocturne demon", lambda k: self.analyze())
+        self.src_list.pack(fill="both", expand=True)
+        self.dst_list = SearchList(left, "Replaces DS2 demon", lambda k: self.analyze())
+        self.dst_list.pack(fill="both", expand=True, pady=(8, 0))
         body.add(left, weight=1)
 
         # Middle: report
@@ -355,15 +367,21 @@ class CustomPage(ttk.Frame):
         ttk.Label(form, text="Animation fixes").grid(row=1, column=0, sticky="w", pady=(4, 0))
         self.map_text = tk.StringVar()
         ttk.Entry(form, textvariable=self.map_text, width=30).grid(row=1, column=1, sticky="w", padx=6, pady=(4, 0))
-        ttk.Label(form, text="DS2=Nocturne, e.g. 6=3; 10=- clears", style="Sub.TLabel").grid(row=1, column=2, sticky="w")
+        self.map_hint = ttk.Label(form, text="DS2=Nocturne, e.g. 6=3; 10=- clears", style="Sub.TLabel")
+        self.map_hint.grid(row=1, column=2, sticky="w")
         ttk.Label(form, text="Animation preset").grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.animation_preset = tk.StringVar(value="Current suggestions")
-        preset = ttk.Combobox(form, textvariable=self.animation_preset, state="readonly", width=29,
-                              values=("Current suggestions", *r.ANIMATION_PRESETS))
+        self.preset_box = preset = ttk.Combobox(form, textvariable=self.animation_preset, state="readonly",
+                                                width=29, values=("Current suggestions", r.FORWARD_PRESET))
         preset.grid(row=2, column=1, sticky="w", padx=6, pady=(4, 0))
         ttk.Button(form, text="Apply preset", command=self.apply_preset).grid(row=2, column=2, sticky="w")
         ttk.Label(form, text="Presets preserve the destination game's empty slots.",
                   style="Sub.TLabel").grid(row=3, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.variants = tk.BooleanVar(value=False)
+        self.variants_cb = ttk.Checkbutton(form, text="Also replace its boss/story versions (same model)",
+                                           variable=self.variants)
+        self.variants_cb.grid(row=4, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.variants_cb.grid_remove()
         self.add_btn = ttk.Button(form, text="Add to my list →", command=self.add)
         self.add_btn.grid(row=0, column=2, sticky="e")
         self.add_btn.state(["disabled"])
@@ -401,42 +419,97 @@ class CustomPage(ttk.Frame):
         self.app.config(cursor="watch")
         self.update_idletasks()
         try:
-            noc_models = r.nocturne_models(key[1])
-            self.noc_list.set_items([(i, f"0x{i:02X}  {r.noc_name(i)}") for i in sorted(noc_models)])
+            self.noc_models = r.nocturne_models(key[1])
+            self.noc_targets = r.nocturne_targets(key[1])
             self.ds2_names = r.ds2_slots(key[0])
             self.locks = r.locked_slots(key[0])
-            self.refresh_ds2()
+            self.on_direction()
         finally:
             self.app.config(cursor="")
 
     def taken(self):
         return {p.slot: p.name for p in self.app.plan}
 
-    def refresh_ds2(self):
-        taken = self.taken()
+    def reverse(self):
+        return self.direction.get() == r.REVERSE_PRESET
+
+    def ds2_items(self, taken=None):
         items = []
         for tid, name in sorted(self.ds2_names.items()):
             if tid in r.RESERVE_SLOTS:
                 continue
             info = r.ds2_info(tid)
-            tag = f"  → {taken[tid]}" if tid in taken else ""
-            lock = "  (locked)" if tid in self.locks else ""
+            tag = f"  → {taken[tid]}" if taken and tid in taken else ""
+            lock = "  (locked)" if taken is not None and tid in self.locks else ""
             items.append((tid, f"{tid}  {name}  (Lv {info['level']}, {info['race']}){lock}{tag}"))
-        self.ds2_list.set_items(items)
+        return items
+
+    def noc_items(self, ids, taken=None):
+        items = []
+        for i in sorted(ids):
+            tag = f"  → {taken[f'N{i:03X}']}" if taken and f"N{i:03X}" in taken else ""
+            items.append((i, f"0x{i:02X}  {r.noc_name(i)}{tag}"))
+        return items
+
+    def on_direction(self):
+        """Swap what the two lists hold when the direction changes."""
+        if not hasattr(self, "ds2_names"):
+            return
+        self.analysis = None
+        self.verdict.configure(text="Pick a demon on each side.")
+        self.add_btn.state(["disabled"])
+        self.slots.delete(*self.slots.get_children())
+        self.map_text.set("")
+        if self.reverse():
+            self.src_list.set_title("Devil Summoner 2 demon")
+            self.dst_list.set_title("Replaces Nocturne demon")
+            self.src_list.set_items(self.ds2_items())
+            self.map_hint.configure(text="Nocturne=DS2, e.g. 1=4; 9=- clears")
+            self.preset_box.configure(values=(r.REVERSE_PRESET,))
+            self.animation_preset.set(r.REVERSE_PRESET)
+            self.variants_cb.grid()
+        else:
+            self.src_list.set_title("Nocturne demon")
+            self.dst_list.set_title("Replaces DS2 demon")
+            self.src_list.set_items(self.noc_items(self.noc_models))
+            self.map_hint.configure(text="DS2=Nocturne, e.g. 6=3; 10=- clears")
+            self.preset_box.configure(values=("Current suggestions", r.FORWARD_PRESET))
+            if self.animation_preset.get() not in ("Current suggestions", r.FORWARD_PRESET):
+                self.animation_preset.set("Current suggestions")
+            self.variants_cb.grid_remove()
+        self.refresh_ds2()
+
+    def refresh_ds2(self):
+        """Refill the destination list (showing what is taken) and the plan."""
+        taken = self.taken()
+        if self.reverse():
+            self.dst_list.set_items(self.noc_items(self.noc_targets, taken))
+        else:
+            self.dst_list.set_items(self.ds2_items(taken))
         self.plan_tree.delete(*self.plan_tree.get_children())
         for i, p in enumerate(self.app.plan):
-            where = f"{p.target} {r.ds2_name(p.target)}" if p.kind == "reskin" else f"new ({p.reserve})"
+            if p.kind == "reskin":
+                where = f"{p.target} {r.ds2_name(p.target)}"
+            elif p.kind == "noc":
+                where = f"Nocturne 0x{p.noc_id:02X} {r.noc_name(p.noc_id)}"
+            else:
+                where = f"new ({p.reserve})"
             self.plan_tree.insert("", "end", iid=str(i), values=(p.name, where))
 
     # -- analysis
     def analyze(self):
-        noc_id, target = self.noc_list.selected(), self.ds2_list.selected()
-        if noc_id is None or target is None:
+        src, dst = self.src_list.selected(), self.dst_list.selected()
+        if src is None or dst is None:
             return
+        rev = self.reverse()
+        noc_id, target = (dst, src) if rev else (src, dst)
         self.app.config(cursor="watch")
         self.update_idletasks()
         try:
-            a = r.analyze(self.app.ds2_iso.get(), self.app.noc_iso.get(), noc_id, target)
+            if rev:
+                a = r.analyze_reverse(self.app.ds2_iso.get(), self.app.noc_iso.get(), target, noc_id)
+            else:
+                a = r.analyze(self.app.ds2_iso.get(), self.app.noc_iso.get(), noc_id, target)
         except (ValueError, OSError) as e:
             self.verdict.configure(text=f"Can't analyze: {e}")
             self.add_btn.state(["disabled"])
@@ -450,11 +523,14 @@ class CustomPage(ttk.Frame):
         else:
             verdict = {3: "Good match", 2: "Should work", 1: "Risky"}[a["score"]]
             verdict = f"{stars}  {verdict}"
-        tested = next((p for p in r.CONFIRMED if p.kind == "reskin" and p.noc_id == noc_id
-                       and p.target == target), None)
+        tested = None if rev else next((p for p in r.CONFIRMED if p.kind == "reskin" and p.noc_id == noc_id
+                                        and p.target == target), None)
         if tested:
             verdict += "  (tested in game)"
-        self.verdict.configure(text=f"{r.noc_name(noc_id)} → {r.ds2_name(target)}:  {verdict}")
+        pair = (f"{r.ds2_name(target)} → {r.noc_name(noc_id)}" if rev
+                else f"{r.noc_name(noc_id)} → {r.ds2_name(target)}")
+        self.verdict.configure(text=f"{pair}:  {verdict}")
+        slot_key = f"N{noc_id:03X}" if rev else target
 
         self.report.configure(state="normal")
         self.report.delete("1.0", "end")
@@ -462,26 +538,34 @@ class CustomPage(ttk.Frame):
             self.report.insert("end", "⚠ " + w + "\n", "bad")
         for n in a["notes"]:
             self.report.insert("end", "• " + n + "\n", "note")
-        self.report.insert("end", f"• Skeletons: {a['noc_bones']} bones vs {a['base_bones']} in the DS2 model.\n", "note")
-        if target in self.taken():
-            self.report.insert("end", f"⚠ {target} is already used by {self.taken()[target]} in your list.\n", "bad")
+        if rev:
+            self.report.insert("end", f"• Skeletons: DS2 model {a['base_bones']} bones, the Nocturne one "
+                                      f"{a['noc_bones']}.\n", "note")
+        else:
+            self.report.insert("end", f"• Skeletons: {a['noc_bones']} bones vs {a['base_bones']} in the DS2 model.\n", "note")
+        if slot_key in self.taken():
+            self.report.insert("end", f"⚠ This demon is already replaced by {self.taken()[slot_key]} in your list.\n", "bad")
         if not a["warnings"] and not a["map"]:
             self.report.insert("end", "• No animation fixes needed.\n", "note")
         self.report.configure(state="disabled")
 
         self.slots.delete(*self.slots.get_children())
-        n = max(len(a["base_frames"]), len(a["noc_frames"]))
+        ds2_frames, noc_frames = (a["src_frames"], a["dst_frames"]) if rev else (a["dst_frames"], a["src_frames"])
+        n = max(len(ds2_frames), len(noc_frames))
         for s in range(n):
-            b = a["base_frames"][s] if s < len(a["base_frames"]) else None
-            c = a["noc_frames"][s] if s < len(a["noc_frames"]) else None
+            b = ds2_frames[s] if s < len(ds2_frames) else None
+            c = noc_frames[s] if s < len(noc_frames) else None
             fix = a["reasons"].get(s, "")
             self.slots.insert("", "end", values=(s, b or "–", c or "–", fix), tags=("fix",) if fix else ())
 
         mapping = tested.map if tested else a["map"]
-        self.map_text.set(",".join(f"{k}={v}" for k, v in sorted(mapping.items())))
+        self.map_text.set(",".join(f"{k}={v if v is not None else '-'}" for k, v in sorted(mapping.items())))
         if self.animation_preset.get() != "Current suggestions":
             self.apply_preset()
-        self.name.set(tested.name if tested else r.noc_name(noc_id)[:20])
+        if rev:
+            self.name.set(r.ds2_name(target)[:20])
+        else:
+            self.name.set(tested.name if tested else r.noc_name(noc_id)[:20])
         self.add_btn.state(["!disabled"] if a["usable"] else ["disabled"])
 
     def apply_preset(self):
@@ -494,7 +578,7 @@ class CustomPage(ttk.Frame):
                            and p.noc_id == a["noc_id"] and p.target == a["target"]), None)
             mapping, reasons = (tested.map if tested else a["map"]), a["reasons"]
         else:
-            mapping, reasons = r.preset_map(name, a["base_frames"], a["noc_frames"])
+            mapping, reasons = r.preset_map(name, a["dst_frames"], a["src_frames"])
         self.map_text.set(",".join(f"{dst}={src if src is not None else '-'}"
                                    for dst, src in sorted(mapping.items())))
         for item in self.slots.get_children():
@@ -516,22 +600,28 @@ class CustomPage(ttk.Frame):
         except ValueError:
             messagebox.showerror(APP, "Animation fixes must look like 6=3,7=4,10=- (DS2=Nocturne; - clears).")
             return
-        have = {i for i, f in enumerate(a["noc_frames"]) if f}
+        rev = a.get("direction") == "reverse"
+        src_game, dst_game = ("DS2", "Nocturne") if rev else ("Nocturne", "DS2")
+        have = {i for i, f in enumerate(a["src_frames"]) if f}
         bad = [v for v in mapping.values() if v is not None and v not in have]
         if bad:
-            messagebox.showerror(APP, f"The Nocturne model has nothing in slot(s) {bad} to copy from.")
+            messagebox.showerror(APP, f"The {src_game} model has nothing in slot(s) {bad} to copy from.")
             return
-        size = max(len(a["base_frames"]), len(a["noc_frames"]))
+        size = max(len(a["dst_frames"]), len(a["src_frames"]))
         if any(not 0 <= dst < size for dst in mapping):
-            messagebox.showerror(APP, f"DS2 destination slots must be between 0 and {size - 1}.")
+            messagebox.showerror(APP, f"{dst_game} destination slots must be between 0 and {size - 1}.")
             return
         target = a["target"]
-        if target in self.taken():
-            if not messagebox.askyesno(APP, f"{target} is already used by {self.taken()[target]}. Replace it?"):
+        if rev:
+            entry = r.NocReskin(name, target, a["noc_id"], mapping, share=True, variants=self.variants.get())
+        else:
+            entry = r.Reskin(name, a["noc_id"], target, mapping, share=True, unlock=target in self.locks)
+        if entry.slot in self.taken():
+            if not messagebox.askyesno(APP, f"That demon is already replaced by {self.taken()[entry.slot]}. "
+                                            "Replace it?"):
                 return
-            self.app.plan = [p for p in self.app.plan if p.slot != target]
-        self.app.plan.append(r.Reskin(name, a["noc_id"], target, mapping, share=True,
-                                      unlock=target in self.locks))
+            self.app.plan = [p for p in self.app.plan if p.slot != entry.slot]
+        self.app.plan.append(entry)
         self.refresh_ds2()
 
     def remove(self):
@@ -569,11 +659,15 @@ class BuildPage(ttk.Frame):
         header(self, "4. Build the modded ISO",
                "This copies your Devil Summoner 2 ISO and patches the copy. It takes a few minutes. "
                "Start the game from an in-game save, not a PCSX2 save state, so the new models load.")
-        out = ttk.LabelFrame(self, text="Save the modded ISO as", padding=PAD)
+        self.out_box = out = ttk.LabelFrame(self, text="Save the modded Devil Summoner 2 ISO as", padding=PAD)
         out.pack(fill="x")
         self.out = tk.StringVar()
         ttk.Entry(out, textvariable=self.out).pack(side="left", fill="x", expand=True)
         ttk.Button(out, text="Choose…", command=self.pick).pack(side="left", padx=(8, 0))
+        self.out2_box = out2 = ttk.LabelFrame(self, text="Save the modded Nocturne ISO as", padding=PAD)
+        self.out2 = tk.StringVar()
+        ttk.Entry(out2, textvariable=self.out2).pack(side="left", fill="x", expand=True)
+        ttk.Button(out2, text="Choose…", command=lambda: self.pick(self.out2)).pack(side="left", padx=(8, 0))
         self.summary = ttk.Label(self, text="", wraplength=900, justify="left")
         self.summary.pack(anchor="w", pady=PAD)
         self.progress = ttk.Progressbar(self, mode="determinate")
@@ -584,30 +678,45 @@ class BuildPage(ttk.Frame):
         self.q = queue.Queue()
         self.thread = None
 
+    def targets(self):
+        """(any Devil Summoner 2 swaps, any Nocturne swaps) in the plan."""
+        return (any(p.kind != "noc" for p in self.app.plan), any(p.kind == "noc" for p in self.app.plan))
+
     def on_show(self):
-        src = self.app.ds2_iso.get()
-        if not self.out.get() and src:
-            stem, ext = os.path.splitext(src)
-            self.out.set(f"{stem}_mod{ext or '.iso'}")
+        for var, src in ((self.out, self.app.ds2_iso.get()), (self.out2, self.app.noc_iso.get())):
+            if not var.get() and src:
+                stem, ext = os.path.splitext(src)
+                var.set(f"{stem}_mod{ext or '.iso'}")
+        want_ds2, want_noc = self.targets()
+        self.out_box.pack_forget()
+        self.out2_box.pack_forget()
+        if want_ds2:
+            self.out_box.pack(fill="x", before=self.summary)
+        if want_noc:
+            self.out2_box.pack(fill="x", pady=(6, 0), before=self.summary)
         reskins = [p for p in self.app.plan if p.kind == "reskin"]
         new = [p for p in self.app.plan if p.kind == "new"]
+        noc = [p for p in self.app.plan if p.kind == "noc"]
         untested = [p for p in self.app.plan if p not in r.CONFIRMED]
-        text = f"{len(reskins)} reskin(s) and {len(new)} new demon(s): " + ", ".join(p.name for p in self.app.plan) + "."
+        text = f"{len(reskins)} reskin(s) and {len(new)} new demon(s) for Devil Summoner 2"
+        text += f", {len(noc)} DS2 demon(s) for Nocturne: " if noc else ": "
+        text += ", ".join(p.name for p in self.app.plan) + "."
         if untested:
             text += (f"\n{len(untested)} of them are your own untested swaps; if one crashes or misbehaves, "
                      "come back and change or drop it.")
         self.summary.configure(text=text)
-        self.progress.configure(value=0, maximum=len(self.app.plan) + 3)
+        self.progress.configure(value=0, maximum=len(self.app.plan) + 3 * sum(self.targets()))
 
     def go_back(self):
         self.app.show({"auto": "ModePage", "manual": "ManualPage", "custom": "CustomPage"}[self.app.mode.get()])
 
-    def pick(self):
+    def pick(self, var=None):
+        var = var or self.out
         path = filedialog.asksaveasfilename(title="Save the modded ISO as", defaultextension=".iso",
-                                            initialfile=os.path.basename(self.out.get() or "DS2_mod.iso"),
+                                            initialfile=os.path.basename(var.get() or "mod.iso"),
                                             filetypes=[("Disc images", "*.iso")])
         if path:
-            self.out.set(path)
+            var.set(path)
 
     def write(self, line):
         self.log.configure(state="normal")
@@ -616,15 +725,21 @@ class BuildPage(ttk.Frame):
         self.log.configure(state="disabled")
 
     def start(self):
-        out = self.out.get().strip()
-        if not out:
+        want_ds2, want_noc = self.targets()
+        outs = ([self.out.get().strip()] if want_ds2 else []) + ([self.out2.get().strip()] if want_noc else [])
+        originals = (os.path.abspath(self.app.ds2_iso.get()), os.path.abspath(self.app.noc_iso.get()))
+        if not all(outs):
             messagebox.showerror(APP, "Choose where to save the modded ISO.")
             return
-        if os.path.abspath(out) in (os.path.abspath(self.app.ds2_iso.get()), os.path.abspath(self.app.noc_iso.get())):
+        if any(os.path.abspath(o) in originals for o in outs):
             messagebox.showerror(APP, "Save the mod under a new name; your original ISOs stay untouched.")
             return
-        if os.path.exists(out) and not messagebox.askyesno(APP, f"{os.path.basename(out)} exists. Replace it?"):
+        if len(outs) == 2 and os.path.abspath(outs[0]) == os.path.abspath(outs[1]):
+            messagebox.showerror(APP, "The two modded ISOs need different names.")
             return
+        for out in outs:
+            if os.path.exists(out) and not messagebox.askyesno(APP, f"{os.path.basename(out)} exists. Replace it?"):
+                return
         self.log.configure(state="normal")
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
@@ -632,11 +747,16 @@ class BuildPage(ttk.Frame):
         for b in (self.back_btn, self.build_btn):
             b.state(["disabled"])
         plan, ds2, noc = list(self.app.plan), self.app.ds2_iso.get(), self.app.noc_iso.get()
+        out_ds2, out_noc = self.out.get().strip(), self.out2.get().strip()
 
         def work():
             try:
-                r.build(plan, ds2, noc, out, log=lambda s: self.q.put(("log", s)))
-                self.q.put(("done", out))
+                log = lambda s: self.q.put(("log", s))
+                if want_ds2:
+                    r.build(plan, ds2, noc, out_ds2, log=log)
+                if want_noc:
+                    r.build_nocturne(plan, noc, ds2, out_noc, log=log)
+                self.q.put(("done", "\n".join(outs)))
             except Exception as e:  # shown to the user, build left unfinished
                 self.q.put(("error", str(e)))
 
